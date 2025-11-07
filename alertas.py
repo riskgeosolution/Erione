@@ -1,4 +1,4 @@
-# alertas.py (CORRIGIDO - Funções Individuais e SEM raise Exception)
+# alertas.py (ATUALIZADO: Novos nomes de status "ALERTA MÁXIMO" e "OBSERVAÇÃO")
 
 import httpx
 import os
@@ -19,15 +19,17 @@ COMTELE_API_KEY = os.environ.get('COMTELE_API_KEY')
 SMS_DESTINATARIOS_STR = os.environ.get('SMS_DESTINATARIOS')
 
 
-# --- Função Helper de E-mail (SMTP2GO) ---
+# --- Função Helper de E-mail (SMTP2GO) (ATUALIZADO) ---
 def _enviar_email_smtp2go(api_key, sender_email, recipients_list, subject, html_body):
     """ Envia um e-mail usando a API HTTP da SMTP2GO. """
 
     cor_css = "grey"
-    if 'PARALIZAÇÃO' in subject.upper():
+    # --- INÍCIO DA ATUALIZAÇÃO ---
+    if 'ALERTA MÁXIMO' in subject.upper():
         cor_css = "#dc3545"
-    elif 'NORMALIDADE' in subject.upper():
+    elif 'OBSERVAÇÃO' in subject.upper():
         cor_css = "#28a745"
+    # --- FIM DA ATUALIZAÇÃO ---
 
     payload = {
         "api_key": api_key,
@@ -101,23 +103,24 @@ def _enviar_sms_comtele(api_key, recipients_list, message):
         return False
 
 
-# --- FUNÇÃO PRINCIPAL UNIFICADA (CHAMADA PELO INDEX.PY) ---
+# --- FUNÇÃO PRINCIPAL UNIFICADA (ATUALIZADA) ---
 def enviar_alerta(id_ponto, nome_ponto, novo_status, status_anterior):
     """
     Função principal de alerta. Tenta enviar E-mail e SMS de forma INDEPENDENTE.
     Não levanta exceção.
     """
 
-    # Mapeamento do conteúdo de acordo com as regras (PARALIZAÇÃO ou NORMALIDADE)
-    if novo_status == "PARALIZAÇÃO" and status_anterior == "ALERTA":
-        assunto_email = f"ALERTA CRÍTICO: PARALIZAÇÃO - {nome_ponto}"
-        html_body_part = f"O ponto {nome_ponto} acaba de passar de ALERTA para a condição CRÍTICA de PARALIZAÇÃO."
-        sms_mensagem = f"ALERTA: {nome_ponto} passou para PARALIZACAO. Acao e requerida."
+    # --- INÍCIO DA ATUALIZAÇÃO (Novas transições e textos) ---
+    if novo_status == "ALERTA MÁXIMO" and status_anterior == "ALERTA":
+        assunto_email = f"ALERTA CRÍTICO: ALERTA MÁXIMO - {nome_ponto}"
+        html_body_part = f"O ponto {nome_ponto} acaba de passar de ALERTA para a condição CRÍTICA de ALERTA MÁXIMO."
+        sms_mensagem = f"ALERTA: {nome_ponto} passou para ALERTA MAXIMO. Acao e requerida."
 
-    elif novo_status == "LIVRE" and status_anterior == "ATENÇÃO":
+    elif novo_status == "OBSERVAÇÃO" and status_anterior == "ATENÇÃO":
         assunto_email = f"AVISO: NORMALIZAÇÃO - {nome_ponto}"
-        html_body_part = f"O ponto {nome_ponto} voltou de ATENÇÃO para a condição LIVRE/NORMALIDADE."
-        sms_mensagem = f"AVISO: {nome_ponto} voltou para LIVRE."
+        html_body_part = f"O ponto {nome_ponto} voltou de ATENÇÃO para a condição de OBSERVAÇÃO."
+        sms_mensagem = f"AVISO: {nome_ponto} voltou para OBSERVACAO."
+    # --- FIM DA ATUALIZAÇÃO ---
 
     else:
         # Se não for uma das transições críticas definidas, ignora

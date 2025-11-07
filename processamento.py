@@ -1,16 +1,16 @@
-# processamento.py (ATUALIZADO: Lógica de status do inclinômetro dividida)
+# processamento.py (ATUALIZADO: Lógica de status para novos limites e nomes)
 
 import pandas as pd
 import datetime
 import traceback
 
 from config import (
-    CHUVA_LIMITE_VERDE, CHUVA_LIMITE_AMARELO, CHUVA_LIMITE_LARANJA,
-    DELTA_TRIGGER_UMIDADE, RISCO_MAP, STATUS_MAP_HIERARQUICO,
-    FREQUENCIA_API_SEGUNDOS,
-    # --- INÍCIO DA ATUALIZAÇÃO ---
-    INCLINOMETRO_DELTA_AMARELO, INCLINOMETRO_DELTA_LARANJA  # Nomes atualizados
+    # --- INÍCIO DA ATUALIZAÇÃO (Novos imports de limites) ---
+    CHUVA_LIMITE_ATENCAO, CHUVA_LIMITE_ALERTA, CHUVA_LIMITE_ALERTA_MAXIMO,
+    INCLINOMETRO_DELTA_ATENCAO, INCLINOMETRO_DELTA_ALERTA, INCLINOMETRO_DELTA_ALERTA_MAXIMO,
     # --- FIM DA ATUALIZAÇÃO ---
+    DELTA_TRIGGER_UMIDADE, RISCO_MAP, STATUS_MAP_HIERARQUICO,
+    FREQUENCIA_API_SEGUNDOS
 )
 
 
@@ -49,28 +49,30 @@ def calcular_acumulado_rolling(df_ponto, horas=72):
         return pd.DataFrame(columns=['id_ponto', 'timestamp', 'chuva_mm'])
 
 
-# (A função definir_status_chuva permanece a mesma)
+# --- INÍCIO DA ATUALIZAÇÃO (Novos Nomes e Lógica de Chuva) ---
 def definir_status_chuva(chuva_mm):
-    STATUS_MAP_CHUVA = {"LIVRE": "success", "ATENÇÃO": "warning", "ALERTA": "orange", "PARALIZAÇÃO": "danger",
+    STATUS_MAP_CHUVA = {"OBSERVAÇÃO": "success", "ATENÇÃO": "warning", "ALERTA": "orange", "ALERTA MÁXIMO": "danger",
                         "SEM DADOS": "secondary", "INDEFINIDO": "secondary"}
     try:
         if pd.isna(chuva_mm):
             status_texto = "SEM DADOS"
-        elif chuva_mm >= CHUVA_LIMITE_LARANJA:
-            status_texto = "PARALIZAÇÃO"
-        elif chuva_mm > CHUVA_LIMITE_AMARELO:
+        elif chuva_mm > CHUVA_LIMITE_ALERTA_MAXIMO:  # > 15.0 mm
+            status_texto = "ALERTA MÁXIMO"
+        elif chuva_mm > CHUVA_LIMITE_ALERTA:       # > 10.0 mm
             status_texto = "ALERTA"
-        elif chuva_mm > CHUVA_LIMITE_VERDE:
+        elif chuva_mm > CHUVA_LIMITE_ATENCAO:     # > 5.0 mm
             status_texto = "ATENÇÃO"
         else:
-            status_texto = "LIVRE"
+            status_texto = "OBSERVAÇÃO"           # 0 a 5.0 mm
         return status_texto, STATUS_MAP_CHUVA.get(status_texto, "secondary")
     except Exception as e:
         print(f"Erro status chuva: {e}");
         return "INDEFINIDO", "secondary"
+# --- FIM DA ATUALIZAÇÃO ---
 
 
 # (A função definir_status_umidade_hierarquico permanece a mesma)
+# (Ela já usa DELTA_TRIGGER_UMIDADE do config, que foi atualizado para 2.0)
 def definir_status_umidade_hierarquico(umidade_1m, umidade_2m, umidade_3m,
                                        base_1m, base_2m, base_3m,
                                        chuva_acumulada_72h=0.0):
@@ -93,19 +95,23 @@ def definir_status_umidade_hierarquico(umidade_1m, umidade_2m, umidade_3m,
                 (not s1_sim and not s2_sim and s3_sim):
             risco_final = 1
 
+        # Limita o risco da umidade ao nível 3 (Alerta Máximo)
+        risco_final = min(risco_final, 3)
+
         return STATUS_MAP_HIERARQUICO[risco_final]
     except Exception as e:
         print(f"Erro ao definir status de umidade solo (fluxograma): {e}")
         return STATUS_MAP_HIERARQUICO[-1]
 
 
-# --- INÍCIO DA ATUALIZAÇÃO (Função agora é INDIVIDUAL) ---
+# --- INÍCIO DA ATUALIZAÇÃO (Novos Nomes e Lógica de Inclinômetro) ---
 def definir_status_inclinometro_individual(inclinometro_val, base_val):
     """
     Define o status de alerta para um ÚNICO eixo (X ou Y)
     com base na VARIAÇÃO (delta) em relação à sua base.
     """
-    STATUS_MAP_INCLINOMETRO = {"LIVRE": "success", "ATENÇÃO": "warning", "ALERTA": "orange", "PARALIZAÇÃO": "danger",
+    STATUS_MAP_INCLINOMETRO = {"OBSERVAÇÃO": "success", "ATENÇÃO": "warning", "ALERTA": "orange",
+                               "ALERTA MÁXIMO": "danger",
                                "SEM DADOS": "secondary", "INDEFINIDO": "secondary"}
     try:
         if pd.isna(inclinometro_val) or pd.isna(base_val):
@@ -114,20 +120,20 @@ def definir_status_inclinometro_individual(inclinometro_val, base_val):
             # Calcula a variação absoluta (delta)
             delta = abs(inclinometro_val - base_val)
 
-            if delta >= INCLINOMETRO_DELTA_LARANJA:  # >= 10.0 graus de variação
-                status_texto = "PARALIZAÇÃO"
-            elif delta > INCLINOMETRO_DELTA_AMARELO:  # > 5.0 graus de variação
+            if delta > INCLINOMETRO_DELTA_ALERTA_MAXIMO:  # > 15.0 graus de variação
+                status_texto = "ALERTA MÁXIMO"
+            elif delta > INCLINOMETRO_DELTA_ALERTA:       # > 10.0 graus de variação
                 status_texto = "ALERTA"
+            elif delta > INCLINOMETRO_DELTA_ATENCAO:      # > 5.0 graus de variação
+                status_texto = "ATENÇÃO"
             else:
-                status_texto = "LIVRE"
+                status_texto = "OBSERVAÇÃO"                 # 0 a 5.0 graus de variação
 
         return status_texto, STATUS_MAP_INCLINOMETRO.get(status_texto, "secondary")
 
     except Exception as e:
         print(f"Erro status inclinômetro: {e}");
         return "INDEFINIDO", "secondary"
-
-
 # --- FIM DA ATUALIZAÇÃO ---
 
 

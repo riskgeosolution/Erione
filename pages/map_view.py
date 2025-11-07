@@ -1,4 +1,4 @@
-# pages/map_view.py (CORRIGIDO: Remove "Estação" duplicada do card e dos pinos)
+# pages/map_view.py (CORRIGIDO: Remove imports desatualizados do config)
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -11,8 +11,9 @@ import numpy as np
 import json
 
 from app import app
-from config import PONTOS_DE_ANALISE, CONSTANTES_PADRAO, RISCO_MAP, STATUS_MAP_HIERARQUICO, CHUVA_LIMITE_VERDE, \
-    CHUVA_LIMITE_AMARELO, CHUVA_LIMITE_LARANJA
+# --- INÍCIO DA CORREÇÃO (Remove imports antigos) ---
+from config import PONTOS_DE_ANALISE, CONSTANTES_PADRAO, RISCO_MAP, STATUS_MAP_HIERARQUICO
+# --- FIM DA CORREÇÃO ---
 import processamento
 import data_source
 
@@ -85,19 +86,17 @@ def update_map_pins(dados_json):
             if pd.isna(chuva_72h_pino):
                 chuva_72h_pino = 0.0
 
-        # --- INÍCIO DA CORREÇÃO (Popup e Tooltip) ---
         pino = dl.Marker(
             position=config['lat_lon'],
             children=[
-                dl.Tooltip(config['nome']),  # <-- CORRIGIDO
+                dl.Tooltip(config['nome']),
                 dl.Popup([
-                    html.H5(config['nome']),  # <-- CORRIGIDO
+                    html.H5(config['nome']),
                     html.P(f"Chuva (72h): {chuva_72h_pino:.1f} mm"),
                     dbc.Button("Ver Dashboard", href=f"/ponto/{id_ponto}", size="sm", color="primary")
                 ])
             ]
         )
-        # --- FIM DA CORREÇÃO ---
 
         pinos_do_mapa.append(pino)
     print(f"[map_view] update_map_pins: Gerados {len(pinos_do_mapa)} pinos.")
@@ -168,7 +167,8 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
         cor_chuva_class = "bg-danger"
 
     # 3. Lógica dos Gauges (Visuais)
-    chuva_max_visual = 90.0
+    # (Definindo 20mm como o teto visual, já que os novos limites são mais baixos)
+    chuva_max_visual = 20.0
     chuva_percent = max(0, min(100, (ultima_chuva_72h / chuva_max_visual) * 100))
     if status_chuva_txt == "SEM DADOS":
         chuva_percent = 0
@@ -247,9 +247,8 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
 
     link_destino = f"/ponto/{id_ponto}"
 
-    # --- INÍCIO DA CORREÇÃO (Título do Card) ---
     conteudo_bloco = html.Div([
-        html.H6(config['nome'], className="text-center mb-2"),  # <-- CORRIGIDO
+        html.H6(config['nome'], className="text-center mb-2"),
         dbc.Row([
             dbc.Col([html.Div("Chuva (72h)", className="small text-center"), chuva_gauge, chuva_badge], width=6,
                     className="mb-2"),
@@ -263,7 +262,6 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
                     width=6),
         ], className="g-2"),
     ], className="km-summary-block")
-    # --- FIM DA CORREÇÃO ---
 
     return html.A(
         conteudo_bloco,
