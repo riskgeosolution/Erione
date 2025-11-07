@@ -1,4 +1,4 @@
-# config.py (ATUALIZADO: Novas Bases de Umidade)
+# config.py (ATUALIZADO: Nova posição lat/lon do Ponto-1)
 
 import os
 import datetime
@@ -32,40 +32,38 @@ DB_TABLE_NAME = "historico_monitoramento"
 FREQUENCIA_API_SEGUNDOS = 60 * 15
 MAX_HISTORICO_PONTOS = (72 * 60 * 60) // FREQUENCIA_API_SEGUNDOS
 
-# --- Configurações dos Pontos de Análise (ATUALIZADO) ---
-
-# --- INÍCIO DA ATUALIZAÇÃO (Novas Bases de Umidade) ---
+# --- Configurações dos Pontos de Análise (Mantido com novas bases) ---
 CONSTANTES_PADRAO = {
-    "UMIDADE_BASE_1M": 26.8,  # Era 30.0
-    "UMIDADE_BASE_2M": 19.2,  # Era 36.0
-    "UMIDADE_BASE_3M": 13.4,  # Era 39.0
-
+    "UMIDADE_BASE_1M": 26.8,
+    "UMIDADE_BASE_2M": 19.2,
+    "UMIDADE_BASE_3M": 13.4,
     "UMIDADE_SATURACAO_1M": 47.0,
     "UMIDADE_SATURACAO_2M": 46.0,
     "UMIDADE_SATURACAO_3M": 49.0,
     "INCLINOMETRO_BASE_X": -17.7,
     "INCLINOMETRO_BASE_Y": 8.3
 }
-# --- FIM DA ATUALIZAÇÃO ---
 
+# --- INÍCIO DA ATUALIZAÇÃO (Nova Coordenada) ---
 PONTOS_DE_ANALISE = {
     "Ponto-1": {
         "nome": "Estação Principal",
         "constantes": CONSTANTES_PADRAO.copy(),
-        "lat_lon": [-23.15864795816037, -45.78894817006661]
+        "lat_lon": [-23.156804878845303, -45.792735433490314] # <-- Posição Atualizada
     },
 }
+# --- FIM DA ATUALIZAÇÃO ---
 
 # --- Regras de Negócio (Alertas) (Mantido com últimos valores) ---
 
-CHUVA_LIMITE_ATENCAO = 5.0  # > 5.0 mm = ATENÇÃO
-CHUVA_LIMITE_ALERTA = 10.0  # > 10.0 mm = ALERTA
+CHUVA_LIMITE_ATENCAO = 5.0      # > 5.0 mm = ATENÇÃO
+CHUVA_LIMITE_ALERTA = 10.0     # > 10.0 mm = ALERTA
 CHUVA_LIMITE_ALERTA_MAXIMO = 15.0  # > 15.0 mm = ALERTA MÁXIMO
 
 DELTA_TRIGGER_UMIDADE = 2.0  # Variação de 2%
 
-INCLINOMETRO_DELTA_ATENCAO = 5.0  # Variação > 5.0 graus = ATENÇÃO
-INCLINOMETRO_DELTA_ALERTA = 10.0  # Variação > 10.0 graus = ALERTA
+INCLINOMETRO_DELTA_ATENCAO = 5.0      # Variação > 5.0 graus = ATENÇÃO
+INCLINOMETRO_DELTA_ALERTA = 10.0     # Variação > 10.0 graus = ALERTA
 INCLINOMETRO_DELTA_ALERTA_MAXIMO = 15.0  # Variação > 15.0 graus = ALERTA MÁXIMO
 
 RISCO_MAP = {

@@ -1,4 +1,4 @@
-# pages/map_view.py (CORRIGIDO: Remove imports desatualizados do config)
+# pages/map_view.py (ATUALIZADO: Adiciona botão de API On-Demand)
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -11,9 +11,7 @@ import numpy as np
 import json
 
 from app import app
-# --- INÍCIO DA CORREÇÃO (Remove imports antigos) ---
 from config import PONTOS_DE_ANALISE, CONSTANTES_PADRAO, RISCO_MAP, STATUS_MAP_HIERARQUICO
-# --- FIM DA CORREÇÃO ---
 import processamento
 import data_source
 
@@ -34,11 +32,41 @@ def get_layout():
                         children=[
                             dl.TileLayer(),
                             dl.LayerGroup(id='map-pins-layer'),
+
+                            # Card de Resumo (Esquerda)
                             dbc.Card(
                                 [dbc.CardHeader("Resumo da Estação", className="text-center small py-1"),
                                  dbc.CardBody(id='map-summary-card-content', children=[dbc.Spinner(size="sm")])],
                                 className="map-summary-card map-summary-left", style={"width": "250px"}
+                            ),
+
+                            # --- INÍCIO DA ATUALIZAÇÃO (Botão de API) ---
+                            # Card do Botão (Direita)
+                            dbc.Card(
+                                dbc.CardBody([
+                                    # O dcc.Loading envolve o botão para
+                                    # mostrar o spinner quando o callback
+                                    # 'callback_atualizar_api' (em index.py)
+                                    # estiver rodando.
+                                    dcc.Loading(
+                                        id="loading-api-button",
+                                        type="default",
+                                        children=[
+                                            dbc.Button(
+                                                ["Atualizar Dados (API)"],
+                                                id='btn-atualizar-api',
+                                                color='primary',
+                                                className="w-100",
+                                                n_clicks=0
+                                            )
+                                        ]
+                                    )
+                                ]),
+                                className="map-summary-card map-summary-right",  # Posição Direita
+                                style={"width": "220px"}  # Largura
                             )
+                            # --- FIM DA ATUALIZAÇÃO ---
+
                         ],
                         style={'width': '100%', 'height': '80vh', 'min-height': '600px'}
                     ),
@@ -50,6 +78,10 @@ def get_layout():
     except Exception as e:
         print(f"ERRO CRÍTICO em map_view.get_layout: {e}");
         return html.Div([html.H1("Erro Layout Mapa"), html.Pre(traceback.format_exc())])
+
+
+# (O resto do arquivo map_view.py permanece IDÊNTICO)
+# ... (callbacks update_map_pins, create_km_block, update_summary_card) ...
 
 
 @app.callback(
@@ -103,13 +135,10 @@ def update_map_pins(dados_json):
     return pinos_do_mapa
 
 
-# --- Função create_km_block (ATUALIZADA) ---
 def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
     """
     Cria o bloco de resumo com 4 cards (2x2): Chuva, Umidade, Incli X, Incli Y.
     """
-
-    # 1. Extrair Status (do worker)
     status_chuva_txt = status_ponto_info.get("chuva", "SEM DADOS")
     status_umid_txt = status_ponto_info.get("umidade", "SEM DADOS")
     status_incli_x_txt = status_ponto_info.get("inclinometro_x", "SEM DADOS")
@@ -127,7 +156,6 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
     risco_incli_y = RISCO_MAP.get(status_incli_y_txt, -1)
     _, status_incli_col_y, cor_incli_class_y = STATUS_MAP_HIERARQUICO.get(risco_incli_y, STATUS_MAP_HIERARQUICO[-1])
 
-    # 2. Extrair Valores (do dataframe)
     ultima_chuva_72h = 0.0
     ultimo_incli_x = 0.0
     ultimo_incli_y = 0.0
@@ -166,8 +194,6 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
         status_chuva_col = "danger";
         cor_chuva_class = "bg-danger"
 
-    # 3. Lógica dos Gauges (Visuais)
-    # (Definindo 20mm como o teto visual, já que os novos limites são mais baixos)
     chuva_max_visual = 20.0
     chuva_percent = max(0, min(100, (ultima_chuva_72h / chuva_max_visual) * 100))
     if status_chuva_txt == "SEM DADOS":
@@ -203,7 +229,6 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
     elif risco_incli_y == 3:
         incli_percent_y = 100
 
-    # 4. Montagem dos Gauges
     chuva_gauge = html.Div(
         [
             html.Div(className=f"gauge-bar {cor_chuva_class}", style={'height': f'{chuva_percent}%'}),
@@ -270,7 +295,6 @@ def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
     )
 
 
-# --- Callback do Card (ATUALIZADO) ---
 @app.callback(
     Output('map-summary-card-content', 'children'),
     [Input('store-dados-sessao', 'data'),
@@ -291,19 +315,15 @@ def update_summary_card(dados_json, status_json):
         df_completo = df_completo.dropna(subset=['timestamp']).copy()
 
         status_atual = status_json
-
         id_ponto = list(PONTOS_DE_ANALISE.keys())[0]
         config = PONTOS_DE_ANALISE[id_ponto]
-
         df_ponto = df_completo[df_completo['id_ponto'] == id_ponto].copy()
 
         status_ponto_info = status_atual.get(id_ponto, {
             "geral": "SEM DADOS", "chuva": "SEM DADOS", "umidade": "SEM DADOS",
             "inclinometro_x": "SEM DADOS", "inclinometro_y": "SEM DADOS"
         })
-
         km_block = create_km_block(id_ponto, config, df_ponto, status_ponto_info)
-
         return [km_block]
 
     except Exception as e:
