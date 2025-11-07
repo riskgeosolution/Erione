@@ -1,0 +1,27 @@
+# Arquivos de Ambiente Virtual do Python
+.venv/
+venv/
+*.pyc
+__pycache__/
+
+# Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos do Editor de Código (ex: VSCode)
+.vscode/
+.idea/
+
+# Arquivos de Dados (O MAIS IMPORTANTE)
+# Isso impede que seus dados locais sejam enviados para o GitHub
+# e que os dados do Render sejam baixados.
+*.db
+*.csv
+*.log
+*.json
+
+# Arquivos sensíveis
+.env
+
+# Ignorar os arquivos YAML e Procfile que não usamos mais
+Procfile
