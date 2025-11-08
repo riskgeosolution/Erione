@@ -1,4 +1,4 @@
-# index.py (VERSÃO FINAL ESTÁVEL: Resolvendo o DuplicateCallback)
+# index.py (VERSÃO FINAL ESTÁVEL: Corrigindo o Conflito de Output/DuplicateCallback)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -387,13 +387,13 @@ def toggle_api_timer(switch_on):
 # --- CALLBACK CRÍTICO DE SINCRONIA E CONTAGEM REGRESSIVA ---
 
 @app.callback(
-    [Output('store-tempo-restante', 'data'),  # Armazena o tempo atualizado
+    [Output('store-tempo-restante', 'data', allow_duplicate=True),  # <-- allow_duplicate permanece aqui
      Output('dummy-output', 'children', allow_duplicate=True)],  # Output Dummy
     [Input('intervalo-countdown-1s', 'n_intervals'),  # Timer de 1s (para contagem)
      Input('url-raiz', 'pathname')],  # Input da URL (para sincronia inicial)
     State('store-intervalo-api-10min', 'data'),  # State do Switch ON/OFF (interval_ms)
     State('store-tempo-restante', 'data'),
-    prevent_initial_call=True  # <-- Mantido True (necessário para o Store)
+    prevent_initial_call=True
 )
 def update_sync_time(n_intervals_1s, pathname, interval_ms, current_store_data):
     INTERVALO_MINUTOS = 10

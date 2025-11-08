@@ -1,4 +1,4 @@
-# pages/main_app.py (VERSÃO FINAL ESTÁVEL: Adiciona o trigger e o campo de tempo)
+# pages/main_app.py (REMOVIDO: Campo de tempo restante)
 
 import dash
 from dash import html, dcc
@@ -49,13 +49,7 @@ def get_navbar():
                                                             className="text-light ms-3",
                                                             style={'font-size': '1.0rem', 'font-weight': '500'})),
 
-                                    # --- NOVO: Tempo Restante (Output alvo) ---
-                                    dbc.NavItem(
-                                        html.Span(id='tempo-restante-sincronia',
-                                                  children="Sincronizando...",
-                                                  className="text-light small fw-bold me-4 ms-2")
-                                    ),
-                                    # --- FIM NOVO ---
+                                    # --- REMOVIDO: Campo de tempo restante (tempo-restante-sincronia) ---
 
                                     # --- Switch de API ---
                                     dbc.NavItem(
@@ -90,9 +84,8 @@ def get_navbar():
                                         className="d-flex align-items-center"
                                     ),
 
-                                    # --- NOVO: Botão Fictício que dispara o evento de carga após o login ---
+                                    # Botão Fictício para Disparo
                                     html.Button(id='navbar-load-trigger', n_clicks=0, style={'display': 'none'})
-                                    # --- FIM NOVO ---
                                 ],
                                 navbar=True,
                                 className="flex-nowrap",
@@ -106,7 +99,7 @@ def get_navbar():
                 ),
             ],
             fluid=True,
-            id='navbar-main-container'  # ID para o Container
+            id='navbar-main-container'
         ),
         style={'backgroundColor': cor_fundo_navbar},
         dark=True,
