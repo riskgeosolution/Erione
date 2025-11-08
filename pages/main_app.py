@@ -1,4 +1,4 @@
-# pages/main_app.py (REVERTIDO para a versão original de Desktop)
+# pages/main_app.py (VERSÃO FINAL ESTÁVEL: Adiciona o trigger e o campo de tempo)
 
 import dash
 from dash import html, dcc
@@ -48,16 +48,51 @@ def get_navbar():
                                     dbc.NavItem(dbc.NavLink("Dashboard Geral", href="/dashboard-geral", active="exact",
                                                             className="text-light ms-3",
                                                             style={'font-size': '1.0rem', 'font-weight': '500'})),
+
+                                    # --- NOVO: Tempo Restante (Output alvo) ---
+                                    dbc.NavItem(
+                                        html.Span(id='tempo-restante-sincronia',
+                                                  children="Sincronizando...",
+                                                  className="text-light small fw-bold me-4 ms-2")
+                                    ),
+                                    # --- FIM NOVO ---
+
+                                    # --- Switch de API ---
+                                    dbc.NavItem(
+                                        dbc.InputGroup(
+                                            [
+                                                dbc.Switch(
+                                                    id='switch-api-auto',
+                                                    value=False,
+                                                    className="ms-3",
+                                                    persistence=True,
+                                                    persistence_type='session'
+                                                ),
+                                                dbc.InputGroupText(id='switch-api-label',
+                                                                   children="OFF",
+                                                                   style={'font-size': '0.8rem',
+                                                                          'font-weight': 'bold'},
+                                                                   className="text-white"),
+                                            ],
+                                            className="ms-4"
+                                        ),
+                                        className="d-flex align-items-center"
+                                    ),
+
                                     dbc.NavItem(
                                         dbc.Button(
                                             "Sair",
                                             id='logout-button',
                                             color="danger",
-                                            className="ms-5",
+                                            className="ms-4",
                                             n_clicks=0
                                         ),
                                         className="d-flex align-items-center"
-                                    )
+                                    ),
+
+                                    # --- NOVO: Botão Fictício que dispara o evento de carga após o login ---
+                                    html.Button(id='navbar-load-trigger', n_clicks=0, style={'display': 'none'})
+                                    # --- FIM NOVO ---
                                 ],
                                 navbar=True,
                                 className="flex-nowrap",
@@ -70,7 +105,8 @@ def get_navbar():
                     justify="between",
                 ),
             ],
-            fluid=True
+            fluid=True,
+            id='navbar-main-container'  # ID para o Container
         ),
         style={'backgroundColor': cor_fundo_navbar},
         dark=True,

@@ -1,4 +1,4 @@
-# index.py (CORRIGIDO: 'className' trocado por 'spinner_class_name' no Spinner)
+# index.py (VERSÃO FINAL ESTÁVEL: Resolvendo o DuplicateCallback)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -7,7 +7,6 @@ import pandas as pd
 from io import StringIO
 import os
 import json
-from dotenv import load_dotenv
 import time
 import datetime
 import traceback
@@ -15,10 +14,13 @@ import traceback
 import data_source
 import processamento
 import alertas
+
 from config import (
     PONTOS_DE_ANALISE, RISCO_MAP, FREQUENCIA_API_SEGUNDOS, CONSTANTES_PADRAO,
     STATUS_MAP_HIERARQUICO
 )
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -32,12 +34,22 @@ from pages import map_view, general_dash, specific_dash
 SENHA_CLIENTE = '123'
 SENHA_ADMIN = 'admin456'
 
+# --- CONSTANTE DE ATRASO ---
+DELAY_SEGUNDOS = 60  # 1 minuto de atraso após o ciclo de 10 minutos
+
+
+# ---------------------------
+
 
 # ==============================================================================
-# --- INÍCIO: LÓGICA DO WORKER MOVIDA PARA O DASH (On-Demand) ---
+# --- LÓGICA DE ATUALIZAÇÃO (Worker On-Demand) ---
 # ==============================================================================
 
 def worker_verificar_alertas(status_novos_dict, status_antigos_dict):
+    """
+    Compara o status antigo com o novo e dispara alertas se necessário.
+    Usa o status "geral".
+    """
     default_status = {"geral": "INDEFINIDO", "chuva": "INDEFINIDO", "umidade": "INDEFINIDO",
                       "inclinometro_x": "INDEFINIDO", "inclinometro_y": "INDEFINIDO"}
 
@@ -75,6 +87,10 @@ def worker_verificar_alertas(status_novos_dict, status_antigos_dict):
 
 
 def on_demand_main_loop():
+    """
+    Executa UM ciclo de coleta e processamento.
+    (Esta função é chamada pelo timer em background)
+    """
     inicio_ciclo = time.time()
     try:
         historico_df_cache_csv, status_antigos_do_disco, logs = data_source.get_all_data_from_disk(worker_mode=True)
@@ -213,16 +229,39 @@ app.layout = html.Div([
     dcc.Store(id='store-ultimo-status', storage_type='session'),
     dcc.Store(id='store-logs-sessao', storage_type='session'),
 
+    # --- NOVO STORE PARA O TEMPO RESTANTE ---
+    dcc.Store(id='store-tempo-restante', data={'texto': 'Sincronizando...', 'countdown_s': 0, 'last_sync_s': 0}),
+    # --- FIM NOVO STORE ---
+
     dcc.Store(id='trigger-atualizacao-dados'),
 
     dcc.Location(id='url-raiz', refresh=False),
 
+    # Adiciona um output dummy (fantasma)
+    html.Div(id='dummy-output', style={'display': 'none'}),
+
+    # Intervalo para ATUALIZAR A TELA (10 segundos)
     dcc.Interval(
         id='intervalo-leitura-disco',
-        interval=10 * 1000,
+        interval=10 * 1000,  # 10 segundos
         n_intervals=0,
         disabled=True
     ),
+
+    # Intervalo para BUSCAR DADOS DA API (10 minutos) -> AGORA É UM STORE
+    dcc.Store(
+        id='store-intervalo-api-10min',  # Armazena o valor do intervalo de 10 min (para ser lido)
+        data=10 * 60 * 1000,
+    ),
+
+    # Timer de 1 Segundo para Contagem Regressiva (Controlado pelo session-store)
+    dcc.Interval(
+        id='intervalo-countdown-1s',
+        interval=1000,
+        n_intervals=0,
+        disabled=True  # Só liga quando logado
+    ),
+
     html.Div(id='page-container-root')
 ])
 
@@ -298,12 +337,14 @@ def logout_callback(n_clicks):
 
 
 @app.callback(
-    Output('intervalo-leitura-disco', 'disabled'),
+    [Output('intervalo-leitura-disco', 'disabled'),
+     Output('intervalo-countdown-1s', 'disabled')],
     Input('session-store', 'data')
 )
 def toggle_interval_update(session_data):
+    # Habilita os timers se o usuário estiver logado
     is_logged_in = session_data and session_data.get('logged_in', False)
-    return not is_logged_in
+    return not is_logged_in, not is_logged_in
 
 
 @app.callback(
@@ -326,39 +367,168 @@ def update_data_and_logs_from_disk(n_intervals, trigger_data):
 
 
 @app.callback(
-    Output('trigger-atualizacao-dados', 'data'),
-    Output('btn-atualizar-api', 'children'),
-    Output('btn-atualizar-api', 'disabled'),
-    Input('btn-atualizar-api', 'n_clicks'),
+    [Output('store-intervalo-api-10min', 'data'),
+     Output('switch-api-label', 'children'),
+     Output('switch-api-label', 'className')],
+    Input('switch-api-auto', 'value'),
     prevent_initial_call=True
 )
-def callback_atualizar_api(n_clicks):
-    if n_clicks is None or n_clicks == 0:
-        return dash.no_update, dash.no_update, dash.no_update
+def toggle_api_timer(switch_on):
+    if switch_on:
+        print("[API Timer] Ligado. Próxima busca em 10 min.")
+        # Retorna o valor do intervalo de 10 min (em ms) para o Store
+        return 10 * 60 * 1000, "ON", "ms-2 bg-light-green"
+    else:
+        print("[API Timer] Desligado.")
+        # Retorna 0ms (desligado) para o Store
+        return 0, "OFF", "ms-2"
 
-    print(f"[API On-Demand] Botão pressionado. Iniciando busca...")
 
-    # --- INÍCIO DA CORREÇÃO ---
-    texto_botao_carregando = [dbc.Spinner(size="sm", spinner_class_name="me-2"), " Atualizando..."]
-    # --- FIM DA CORREÇÃO ---
+# --- CALLBACK CRÍTICO DE SINCRONIA E CONTAGEM REGRESSIVA ---
 
-    try:
-        sucesso = on_demand_main_loop()
-        if not sucesso:
-            data_source.adicionar_log("GERAL", "AVISO: A busca On-Demand falhou ou não retornou dados.")
-    except Exception as e:
-        print(f"ERRO CRÍTICO [API On-Demand]: {e}")
-        traceback.print_exc()
-        data_source.adicionar_log("GERAL", f"ERRO CRÍTICO [API On-Demand]: {e}")
-        texto_botao_original = ["Atualizar Dados (API)"]
-        return str(datetime.datetime.now()), texto_botao_original, False
+@app.callback(
+    [Output('store-tempo-restante', 'data'),  # Armazena o tempo atualizado
+     Output('dummy-output', 'children', allow_duplicate=True)],  # Output Dummy
+    [Input('intervalo-countdown-1s', 'n_intervals'),  # Timer de 1s (para contagem)
+     Input('url-raiz', 'pathname')],  # Input da URL (para sincronia inicial)
+    State('store-intervalo-api-10min', 'data'),  # State do Switch ON/OFF (interval_ms)
+    State('store-tempo-restante', 'data'),
+    prevent_initial_call=True  # <-- Mantido True (necessário para o Store)
+)
+def update_sync_time(n_intervals_1s, pathname, interval_ms, current_store_data):
+    INTERVALO_MINUTOS = 10
+    ATRASO_ADICIONAL_SEGUNDOS = DELAY_SEGUNDOS  # 60 segundos
 
-    texto_botao_original = ["Atualizar Dados (API)"]
-    ping_data = str(datetime.datetime.now())
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
-    print(f"[API On-Demand] Busca concluída. Pingando o carregador de dados.")
+    # 0. Proteção e Lógica de Desligamento
+    if pathname == '/' or interval_ms == 0:
+        return {'texto': "API Desligada", 'countdown_s': -1, 'last_sync_s': 0}, ""
 
-    return ping_data, texto_botao_original, False
+    # 1. LÓGICA DE INICIALIZAÇÃO/RECALCULO (Disparado por URL)
+    if triggered_id == 'url-raiz':
+
+        AGORA_UTC = datetime.datetime.now(datetime.timezone.utc)
+
+        # Calcula o tempo para o próximo ciclo de 10 min (base)
+        minuto_atual = AGORA_UTC.minute
+        minuto_proximo_ciclo = (minuto_atual // INTERVALO_MINUTOS + 1) * INTERVALO_MINUTOS
+        proxima_execucao_base = AGORA_UTC.replace(second=0, microsecond=0)
+
+        if minuto_proximo_ciclo >= 60:
+            proxima_execucao_base = proxima_execucao_base + datetime.timedelta(hours=1)
+            minuto_proximo_ciclo = 0
+
+        proxima_execucao_base = proxima_execucao_base.replace(minute=minuto_proximo_ciclo)
+
+        # Adiciona o ATRASO e corrige se já passou
+        proxima_execucao_final = proxima_execucao_base + datetime.timedelta(seconds=ATRASO_ADICIONAL_SEGUNDOS)
+
+        while proxima_execucao_final <= AGORA_UTC:
+            proxima_execucao_base += datetime.timedelta(minutes=INTERVALO_MINUTOS)
+            proxima_execucao_final = proxima_execucao_base + datetime.timedelta(seconds=ATRASO_ADICIONAL_SEGUNDOS)
+
+        # Tempo restante em segundos para a primeira requisição agendada
+        tempo_restante_s = int((proxima_execucao_final - AGORA_UTC).total_seconds())
+
+        if tempo_restante_s <= 0:  # Caso extremo, usa o ciclo completo
+            tempo_restante_s = 10 * 60
+
+        print(f"[Timer Sync] Recalculado. Próxima execução em {tempo_restante_s}s.")
+
+        min = tempo_restante_s // 60
+        sec = tempo_restante_s % 60
+        texto_tempo = f"Próxima Requisição: {min:02d}:{sec:02d}"
+
+        # Retorna o store e o novo intervalo
+        return {'texto': texto_tempo, 'countdown_s': tempo_restante_s, 'last_sync_s': time.time()}, ""
+
+    # 2. LÓGICA DE CONTAGEM REGRESSIVA (Disparado pelo Timer de 1s)
+    elif triggered_id == 'intervalo-countdown-1s':
+
+        current_s = current_store_data.get('countdown_s', 0)
+
+        if current_s > 1:
+            # Continua a contagem regressiva
+            next_s = current_s - 1
+            min = next_s // 60
+            sec = next_s % 60
+            texto_tempo = f"Próxima Requisição: {min:02d}:{sec:02d}"
+
+            # Retorna a contagem atualizada
+            return {'texto': texto_tempo, 'countdown_s': next_s, 'last_sync_s': time.time()}, ""
+
+        elif current_s == 1:
+            # Tempo esgotado! Dispara o evento de requisição da API (Store)
+            print("[Timer Sync] ALVO ATINGIDO (1s). Disparando requisição da API.")
+            # O retorno negativo (-2) força o callback do disparador a agir
+            return {'texto': "REQUISITANDO...", 'countdown_s': -2, 'last_sync_s': time.time()}, ""
+
+    return dash.no_update, dash.no_update
+
+
+# --- NOVO CALLBACK: Faz a Requisição da API quando o Store de Tempo Dispara ---
+
+@app.callback(
+    Output('trigger-atualizacao-dados', 'data'),
+    Input('store-tempo-restante', 'data'),
+    prevent_initial_call=True
+)
+def callback_disparador_api(data_store):
+    # Verifica se a mensagem de disparo está presente
+    if data_store and data_store.get('countdown_s') == -2:
+
+        print(f"[API Timer] Disparado por Store. Iniciando busca em background...")
+
+        # O callback principal (que usa background=True)
+        try:
+            # Requisita a API
+            sucesso = on_demand_main_loop()
+            if not sucesso:
+                data_source.adicionar_log("GERAL", "AVISO: A busca automática (10min) falhou.")
+        except Exception as e:
+            print(f"ERRO CRÍTICO [API Timer]: {e}")
+            traceback.print_exc()
+            data_source.adicionar_log("GERAL", f"ERRO CRÍTICO (API Timer): {e}")
+            return dash.no_update
+
+        ping_data = str(datetime.datetime.now())
+        print(f"[API Timer] Busca concluída. Pingando o 'trigger-atualizacao-dados'.")
+
+        # Retorna o ping para atualizar a tela
+        return ping_data
+
+    return dash.no_update
+
+
+# --- NOVO CALLBACK: Atualiza o Output da Navbar com o Valor do Store ---
+@app.callback(
+    Output('tempo-restante-sincronia', 'children'),
+    Input('store-tempo-restante', 'data')
+)
+def display_sync_time(data):
+    if data and data.get('texto'):
+        return data['texto']
+    return "Sincronizando..."
+
+
+# --- FIM NOVO CALLBACK ---
+
+
+# --- Callback de Background (Mantido, mas agora só atualiza a tela) ---
+@app.callback(
+    Output('dummy-output', 'children', allow_duplicate=True),
+    Input('trigger-atualizacao-dados', 'data'),
+    background=True,
+    prevent_initial_call=True
+)
+def callback_atualizar_api_automatico(data):
+    # A ÚNICA FUNÇÃO DESTE CALLBACK É FORÇAR A ATUALIZAÇÃO FINAL DA TELA
+    if data:
+        print(f"[Atualização de Tela] Forçada após disparo da API em {data}.")
+        return str(time.time())
+    return dash.no_update
 
 
 # --- Ponto de entrada do Servidor WEB ---
@@ -369,6 +539,11 @@ if __name__ == '__main__':
     port = 8050
     print(f"Iniciando o servidor Dash (WEB) em http://{host}:{port}/")
     try:
-        app.run(debug=True, host=host, port=port)
+        app.run(
+            debug=True,
+            host=host,
+            port=port,
+            use_reloader=False  # Para evitar travamento com background callbacks
+        )
     except Exception as e:
         print(f"ERRO CRÍTICO NA EXECUÇÃO DO APP.RUN: {e}")

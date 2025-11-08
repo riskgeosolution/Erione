@@ -1,4 +1,4 @@
-/* assets/style.css (COMPLETO: Adicionado CSS do Footer) */
+/* assets/style.css (COMPLETO E ATUALIZADO) */
 
 /* --- NOVO: Fundo azul suave para a página de login --- */
 .bg-gemini-blue {
@@ -22,7 +22,7 @@ h1, h2, h3, h4, h5, h6 { color: #343a40; margin-bottom: 0.5rem; }
 /* Esta é a classe que força o texto do status a ficar preto e em negrito */
 .badge-black-text { color: #000 !important; font-weight: bold; }
 
-/* --- INÍCIO DA ALTERAÇÃO: Cor Amarela (Ouro) --- */
+/* --- CORREÇÃO: Cor Amarela (Ouro) --- */
 .bg-warning {
     background-color: #FFD700 !important; /* Amarelo Ouro */
     color: #000 !important; /* Garante texto preto para contraste */
@@ -33,7 +33,7 @@ h1, h2, h3, h4, h5, h6 { color: #343a40; margin-bottom: 0.5rem; }
 .badge-orange { color: #fff; background-color: #fd7e14 !important; }
 
 
-/* --- INÍCIO DA NOVA CORREÇÃO: Força texto preto nos cards --- */
+/* --- CORREÇÃO: Força texto preto nos cards --- */
 /* Garante que o Amarelo (Atenção) fique preto */
 .card.bg-warning,
 .card.bg-warning h5,
@@ -56,24 +56,34 @@ h1, h2, h3, h4, h5, h6 { color: #343a40; margin-bottom: 0.5rem; }
 }
 /* --- FIM DA NOVA CORREÇÃO --- */
 
-
-/* --- NENHUMA REGRA @media AQUI --- */
-
-
-/* --- INÍCIO: ESTILO DO FOOTER DE COPYRIGHT (Minimalista) --- */
+/* --- ESTILO DO FOOTER DE COPYRIGHT (Minimalista) --- */
 .footer-fixed-bottom {
     position: fixed;
     bottom: 0;
     width: 100%;
-
-    /* Removemos o fundo e a borda */
-    /* background-color: #f8f9fa; */
-    /* border-top: 1px solid #dee2e6; */
-
-    height: 30px; /* Altura menor */
+    height: 30px;
     z-index: 1020;
-
-    /* Adicionamos padding-bottom para empurrar o texto para baixo */
     padding-bottom: 5px;
 }
 /* --- FIM: ESTILO DO FOOTER --- */
+
+
+/* --- INÍCIO DA NOVA ALTERAÇÃO (Deixa o Switch Verde) --- */
+/*
+  Isso mira o componente .form-check-input (que é o dbc.Switch)
+  SOMENTE quando ele está :checked (ligado).
+*/
+.form-check-input:checked {
+    background-color: #28a745 !important; /* Verde (Bootstrap Success) */
+    border-color: #28a745 !important;     /* Borda Verde */
+}
+/* --- FIM DA NOVA ALTERAÇÃO --- */
+
+
+/* --- INÍCIO DA NOVA CLASSE PARA O FUNDO VERDE DO LABEL ON/OFF --- */
+.bg-light-green {
+    background-color: #28a745 !important; /* Mesma cor verde do switch! */
+    color: #ffffff !important;            /* Texto branco para contraste */
+    border-color: #28a745 !important;     /* Borda verde também */
+}
+/* --- FIM DA NOVA CLASSE --- */

@@ -1,4 +1,4 @@
-# pages/map_view.py (ATUALIZADO: Adiciona botão de API On-Demand)
+# pages/map_view.py (ALTERADO: Botão de API On-Demand Removido)
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -40,32 +40,9 @@ def get_layout():
                                 className="map-summary-card map-summary-left", style={"width": "250px"}
                             ),
 
-                            # --- INÍCIO DA ATUALIZAÇÃO (Botão de API) ---
-                            # Card do Botão (Direita)
-                            dbc.Card(
-                                dbc.CardBody([
-                                    # O dcc.Loading envolve o botão para
-                                    # mostrar o spinner quando o callback
-                                    # 'callback_atualizar_api' (em index.py)
-                                    # estiver rodando.
-                                    dcc.Loading(
-                                        id="loading-api-button",
-                                        type="default",
-                                        children=[
-                                            dbc.Button(
-                                                ["Atualizar Dados (API)"],
-                                                id='btn-atualizar-api',
-                                                color='primary',
-                                                className="w-100",
-                                                n_clicks=0
-                                            )
-                                        ]
-                                    )
-                                ]),
-                                className="map-summary-card map-summary-right",  # Posição Direita
-                                style={"width": "220px"}  # Largura
-                            )
-                            # --- FIM DA ATUALIZAÇÃO ---
+                            # --- INÍCIO DA ALTERAÇÃO (Botão de API Removido) ---
+                            # O card do botão que estava aqui (map-summary-right) foi REMOVIDO.
+                            # --- FIM DA ALTERAÇÃO ---
 
                         ],
                         style={'width': '100%', 'height': '80vh', 'min-height': '600px'}
