@@ -1,4 +1,4 @@
-# pages/specific_dash.py (CORREÇÃO FINAL: Restaurando layout quebrado)
+# pages/specific_dash.py (CORREÇÃO FINAL E DEFINITIVA: PDF de Dados)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -41,7 +41,6 @@ def get_layout():
     return dbc.Container([
         dcc.Store(id='store-id-ponto-ativo'),
         dcc.Store(id='store-logs-filtrados'),
-        # Mantém apenas os componentes para o Excel, que ainda usa threads
         dcc.Store(id='excel-task-id-store'),
         dcc.Interval(id='excel-check-interval', interval=2 * 1000, n_intervals=0, disabled=True),
         html.Div(id='specific-dash-title', className="my-3 text-center"),
@@ -65,11 +64,9 @@ def get_layout():
                         dbc.Button("Gerar Excel", id='btn-excel-especifico', color="success", size="sm"),
                         dcc.Download(id='download-excel-especifico')
                     ], className="d-flex justify-content-center"),
-                    # --- COMPONENTES RESTAURADOS PARA O EXCEL ---
                     html.Div(id='report-status-indicator', children=None, className="text-center mt-3 small text-muted"),
                     dbc.Alert("Não há dados neste período para gerar o relatório.", id="alert-pdf-error", color="danger", is_open=False, dismissable=True, className="mt-3"),
                     dbc.Alert("Erro desconhecido ao gerar relatório.", id="alert-pdf-generic-error", color="danger", is_open=False, dismissable=True, className="mt-3"),
-                    # --- FIM DA RESTAURAÇÃO ---
                 ]), className="shadow-sm mb-4"),
                 dbc.Card(dbc.CardBody([
                     html.H6("Logs de Eventos", className="card-title"),
@@ -90,7 +87,6 @@ def get_layout():
         ], id='modal-logs', is_open=False, size="lg"),
     ], fluid=True)
 
-# (Callbacks de título e dashboard principal permanecem os mesmos)
 @app.callback(Output('specific-dash-title', 'children'), Input('url-raiz', 'pathname'))
 def update_specific_title(pathname):
     if not pathname.startswith('/ponto/'): return dash.no_update
@@ -197,7 +193,7 @@ def load_logs_content(is_open, id_ponto, logs_json):
     if not is_open or not id_ponto or not logs_json:
         return dash.no_update if not is_open else "Nenhum evento registrado.", dash.no_update
     try:
-        logs_list = logs_json.split('\n') if isinstance(logs_json, str) else json.loads(logs_json) if isinstance(logs_json, str) else logs_json
+        logs_list = logs_json.split('\n') if isinstance(logs_json, str) else json.loads(logs_json) if isinstance(logs_json, str) else logs_list
         logs_list = [log.strip() for log in logs_list if log.strip()]
         if not logs_list: return "Nenhum evento registrado.", []
         logs_ponto_ou_geral = [log for log in logs_list if f"| {id_ponto} |" in log or "| GERAL |" in log]
@@ -241,7 +237,7 @@ def generate_logs_pdf(n_clicks, id_ponto, logs_filtrados):
         traceback.print_exc()
         raise PreventUpdate
 
-# --- CALLBACK SIMPLIFICADO PARA PDF DE DADOS ---
+# --- CALLBACK SIMPLIFICADO PARA PDF DE DADOS (CORRIGIDO) ---
 @app.callback(
     [Output('download-pdf-especifico', 'data'),
      Output('alert-pdf-error', 'is_open')],
@@ -256,14 +252,22 @@ def generate_data_pdf_direct(n_clicks, start_date, end_date, id_ponto, status_js
     if n_clicks is None or not id_ponto:
         raise PreventUpdate
 
-    pdf_buffer, nome_arquivo, error_msg = gerador_pdf.gerar_relatorio_dados_direto(
-        start_date, end_date, id_ponto, status_json
-    )
+    try:
+        pdf_buffer, nome_arquivo, error_msg = gerador_pdf.gerar_relatorio_dados_direto(
+            start_date, end_date, id_ponto, status_json
+        )
 
-    if error_msg:
+        if error_msg:
+            print(f"AVISO: Erro ao gerar PDF de dados: {error_msg}")
+            return dash.no_update, True
+        
+        content_base64 = base64.b64encode(pdf_buffer).decode('utf-8')
+        return dict(content=content_base64, filename=nome_arquivo, base64=True, type="application/pdf"), False
+
+    except Exception as e:
+        print(f"ERRO CRÍTICO no Callback generate_data_pdf_direct:")
+        traceback.print_exc()
         return dash.no_update, True
-    
-    return dcc.send_bytes(pdf_buffer, nome_arquivo), False
 # --- FIM DO CALLBACK SIMPLIFICADO ---
 
 
@@ -279,6 +283,8 @@ def trigger_excel_generation(n_clicks, start_date, end_date, id_ponto):
         status_indicator = html.Div([html.Span(dbc.Spinner(size="sm"), className="me-2"), "Gerando Excel, por favor aguarde..."])
         return task_id, False, False, False, status_indicator, True, True
     except Exception as e:
+        print(f"ERRO CRÍTICO ao INICIAR a thread de Excel: {e}")
+        traceback.print_exc()
         return dash.no_update, True, False, True, "Erro ao iniciar a geração.", False, False
 
 @app.callback([Output('download-excel-especifico', 'data'), Output('excel-check-interval', 'disabled', allow_duplicate=True), Output('alert-pdf-error', 'is_open', allow_duplicate=True), Output('alert-pdf-generic-error', 'is_open', allow_duplicate=True), Output('report-status-indicator', 'children', allow_duplicate=True), Output('btn-pdf-especifico', 'disabled', allow_duplicate=True), Output('btn-excel-especifico', 'disabled', allow_duplicate=True)], Input('excel-check-interval', 'n_intervals'), State('excel-task-id-store', 'data'), prevent_initial_call=True)

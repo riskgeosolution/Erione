@@ -1,4 +1,4 @@
-# gerador_pdf.py (CORREÇÃO FINAL E DEFINITIVA v5)
+# gerador_pdf.py (REESCRITO COM LÓGICA DIRETA)
 
 import io
 from fpdf import FPDF, Align
@@ -17,8 +17,8 @@ from config import PONTOS_DE_ANALISE, RISCO_MAP, STATUS_MAP_HIERARQUICO
 import matplotlib
 
 matplotlib.use('Agg')
-PDF_CACHE = {}
-PDF_CACHE_LOCK = threading.Lock()
+
+# O cache de tarefas em background é mantido apenas para o Excel
 EXCEL_CACHE = {}
 EXCEL_CACHE_LOCK = threading.Lock()
 
@@ -142,12 +142,9 @@ def gerar_relatorio_dados_direto(start_date, end_date, id_ponto, status_json):
         df_filtrado.loc[:, 'timestamp_local'] = df_filtrado['timestamp'].dt.tz_convert('America/Sao_Paulo')
         config = PONTOS_DE_ANALISE.get(id_ponto, {"nome": "Ponto"})
         
-        # --- CORREÇÃO DEFINITIVA ---
-        # Assume que status_json já é um dicionário, como provado pelos logs.
-        status_atual_dict = status_json
+        status_atual_dict = status_json if isinstance(status_json, dict) else json.loads(status_json)
         status_ponto_dict = status_atual_dict.get(id_ponto, {"geral": "INDEFINIDO"})
         status_geral_ponto_txt = status_ponto_dict.get('geral', 'INDEFINIDO')
-        # --- FIM DA CORREÇÃO ---
         
         risco_geral = RISCO_MAP.get(status_geral_ponto_txt, -1)
         status_texto, status_cor = STATUS_MAP_HIERARQUICO.get(risco_geral, ("INDEFINIDO", "secondary"))[:2]
