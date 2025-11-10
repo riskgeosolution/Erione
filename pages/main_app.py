@@ -1,20 +1,25 @@
-# pages/main_app.py (REMOVIDO: Campo de tempo restante)
+# pages/main_app.py (CORREÇÃO FINAL: Sincroniza o Switch com o Estado Global)
 
 import dash
-from dash import html, dcc
+from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
+import importlib
 
-# Importa o app central (para os assets)
 from app import app
+import calibracao_base # Importa para ler o estado inicial
 
 
 def get_navbar():
-    """ Retorna a barra de navegação azul (Layout original do Desktop) """
-
+    """ Retorna a barra de navegação azul. """
     logo_riskgeo_path = app.get_asset_url('LogoMarca RiskGeo Solutions.png')
     logo_tamoios_path = app.get_asset_url('tamoios.png')
     cor_fundo_navbar = '#003366'
     nova_altura_logo = "50px"
+
+    # --- NOVO: Lê o estado inicial do arquivo ---
+    importlib.reload(calibracao_base)
+    initial_switch_value = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
+    # --- FIM NOVO ---
 
     navbar = dbc.Navbar(
         dbc.Container(
@@ -24,10 +29,8 @@ def get_navbar():
                         dbc.Col(
                             dbc.Row(
                                 [
-                                    dbc.Col(html.A(html.Img(src=logo_tamoios_path, height=nova_altura_logo), href="/"),
-                                            width="auto"),
-                                    dbc.Col(html.Img(src=logo_riskgeo_path, height=nova_altura_logo, className="ms-3"),
-                                            width="auto"),
+                                    dbc.Col(html.A(html.Img(src=logo_tamoios_path, height=nova_altura_logo), href="/"), width="auto"),
+                                    dbc.Col(html.Img(src=logo_riskgeo_path, height=nova_altura_logo, className="ms-3"), width="auto"),
                                 ],
                                 align="center",
                                 className="g-0",
@@ -42,49 +45,28 @@ def get_navbar():
                         dbc.Col(
                             dbc.Nav(
                                 [
-                                    dbc.NavItem(
-                                        dbc.NavLink("Mapa Geral", href="/", active="exact", className="text-light",
-                                                    style={'font-size': '1.0rem', 'font-weight': '500'})),
-                                    dbc.NavItem(dbc.NavLink("Dashboard Geral", href="/dashboard-geral", active="exact",
-                                                            className="text-light ms-3",
-                                                            style={'font-size': '1.0rem', 'font-weight': '500'})),
-
-                                    # --- REMOVIDO: Campo de tempo restante (tempo-restante-sincronia) ---
-
-                                    # --- Switch de API ---
+                                    dbc.NavItem(dbc.NavLink("Mapa Geral", href="/", active="exact", className="text-light", style={'font-size': '1.0rem', 'font-weight': '500'})),
+                                    dbc.NavItem(dbc.NavLink("Dashboard Geral", href="/dashboard-geral", active="exact", className="text-light ms-3", style={'font-size': '1.0rem', 'font-weight': '500'})),
                                     dbc.NavItem(
                                         dbc.InputGroup(
                                             [
                                                 dbc.Switch(
                                                     id='switch-api-auto',
-                                                    value=False,
+                                                    value=initial_switch_value, # <-- Usa o valor lido do arquivo
                                                     className="ms-3",
                                                     persistence=True,
                                                     persistence_type='session'
                                                 ),
-                                                dbc.InputGroupText(id='switch-api-label',
-                                                                   children="OFF",
-                                                                   style={'font-size': '0.8rem',
-                                                                          'font-weight': 'bold'},
-                                                                   className="text-white"),
+                                                dbc.InputGroupText(id='switch-api-label', children="OFF", style={'font-size': '0.8rem', 'font-weight': 'bold'}, className="text-white"),
                                             ],
                                             className="ms-4"
                                         ),
                                         className="d-flex align-items-center"
                                     ),
-
                                     dbc.NavItem(
-                                        dbc.Button(
-                                            "Sair",
-                                            id='logout-button',
-                                            color="danger",
-                                            className="ms-4",
-                                            n_clicks=0
-                                        ),
+                                        dbc.Button("Sair", id='logout-button', color="danger", className="ms-4", n_clicks=0),
                                         className="d-flex align-items-center"
                                     ),
-
-                                    # Botão Fictício para Disparo
                                     html.Button(id='navbar-load-trigger', n_clicks=0, style={'display': 'none'})
                                 ],
                                 navbar=True,
@@ -109,9 +91,7 @@ def get_navbar():
 
 
 def get_layout():
-    """ Retorna o layout principal do app (depois do login). """
-    layout = html.Div([
-        get_navbar(),
-        html.Div(id='page-content')
-    ])
-    return layout
+    """ 
+    Retorna o layout principal do app (depois do login).
+    """
+    return html.Div(id='page-content')
