@@ -1,4 +1,4 @@
-# pages/map_view.py (ALTERADO: Botão de API On-Demand Removido)
+# pages/map_view.py (REVERTIDO: Círculo de volta à base do pino)
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -7,18 +7,16 @@ import dash_leaflet as dl
 import pandas as pd
 from io import StringIO
 import traceback
-import numpy as np
 import json
 
 from app import app
-from config import PONTOS_DE_ANALISE, CONSTANTES_PADRAO, RISCO_MAP, STATUS_MAP_HIERARQUICO
+from config import PONTOS_DE_ANALISE, RISCO_MAP, STATUS_MAP_HIERARQUICO
 import processamento
 import data_source
 
 
 def get_layout():
-    """ Retorna o layout da página do mapa (1 Card Superior). """
-    print("Executando map_view.get_layout() (1 Card Superior)")
+    """ Retorna o layout da página do mapa. """
     try:
         primeiro_ponto_id = list(PONTOS_DE_ANALISE.keys())[0]
         map_center = PONTOS_DE_ANALISE[primeiro_ponto_id]['lat_lon']
@@ -32,89 +30,103 @@ def get_layout():
                         children=[
                             dl.TileLayer(),
                             dl.LayerGroup(id='map-pins-layer'),
-
-                            # Card de Resumo (Esquerda)
                             dbc.Card(
                                 [dbc.CardHeader("Resumo da Estação", className="text-center small py-1"),
                                  dbc.CardBody(id='map-summary-card-content', children=[dbc.Spinner(size="sm")])],
                                 className="map-summary-card map-summary-left", style={"width": "250px"}
                             ),
-
-                            # --- INÍCIO DA ALTERAÇÃO (Botão de API Removido) ---
-                            # O card do botão que estava aqui (map-summary-right) foi REMOVIDO.
-                            # --- FIM DA ALTERAÇÃO ---
-
                         ],
                         style={'width': '100%', 'height': '80vh', 'min-height': '600px'}
                     ),
                 ], style={'position': 'relative'}),
                 width=12, className="mb-4")])
         ], fluid=True)
-        print("Layout do mapa (1 Card) criado com sucesso.")
         return layout
     except Exception as e:
         print(f"ERRO CRÍTICO em map_view.get_layout: {e}");
         return html.Div([html.H1("Erro Layout Mapa"), html.Pre(traceback.format_exc())])
 
 
-# (O resto do arquivo map_view.py permanece IDÊNTICO)
-# ... (callbacks update_map_pins, create_km_block, update_summary_card) ...
-
-
 @app.callback(
     Output('map-pins-layer', 'children'),
-    Input('store-dados-sessao', 'data')
+    [Input('store-dados-sessao', 'data'),
+     Input('store-ultimo-status', 'data')]
 )
-def update_map_pins(dados_json):
-    if not dados_json:
+def update_map_pins(dados_json, status_json):
+    if not dados_json or not status_json:
         return []
     try:
         df_completo = pd.read_json(StringIO(dados_json), orient='split').copy()
-        if 'timestamp' not in df_completo.columns or df_completo.empty:
-            return []
-        df_completo.loc[:, 'timestamp'] = pd.to_datetime(df_completo['timestamp'], errors='coerce')
-        df_validos = df_completo.dropna(subset=['timestamp']).copy()
-        if df_validos.empty:
-            return []
-        ultimo_timestamp_geral = df_validos['timestamp'].max()
-        if pd.isna(ultimo_timestamp_geral):
+        if df_completo.empty:
             return []
     except Exception as e:
         print(f"ERRO CRÍTICO em update_map_pins ao processar dados: {e}")
         return []
 
-    pinos_do_mapa = []
+    elementos_mapa = []
     df_acumulado_completo = processamento.calcular_acumulado_rolling(df_completo, horas=72)
     df_acumulado_ultimo = df_acumulado_completo.groupby('id_ponto').last().reset_index()
 
-    for id_ponto, config in PONTOS_DE_ANALISE.items():
-        dados_ponto_acumulado = df_acumulado_ultimo[df_acumulado_ultimo['id_ponto'] == id_ponto]
-        chuva_72h_pino = 0.0
-        if not dados_ponto_acumulado.empty:
-            chuva_72h_pino = dados_ponto_acumulado.iloc[0].get('chuva_mm', 0.0)
-            if pd.isna(chuva_72h_pino):
-                chuva_72h_pino = 0.0
+    cor_map = {
+        'NORMAL': '#28a745', 'OBSERVAÇÃO': '#ffc107',
+        'ALERTA': '#f56c42', 'ALERTA MÁXIMO': '#dc3545',
+        'SEM DADOS': '#6c757d', 'INDEFINIDO': '#6c757d'
+    }
 
-        pino = dl.Marker(
+    for id_ponto, config in PONTOS_DE_ANALISE.items():
+        status_info = status_json.get(id_ponto, {})
+        status_geral = status_info.get("geral", "SEM DADOS")
+        cor_circulo = cor_map.get(status_geral, '#6c757d')
+        
+        dados_ponto_acumulado = df_acumulado_ultimo[df_acumulado_ultimo['id_ponto'] == id_ponto]
+        chuva_72h = 0.0
+        if not dados_ponto_acumulado.empty:
+            valor = dados_ponto_acumulado.iloc[0].get('chuva_mm', 0.0)
+            if pd.notna(valor):
+                chuva_72h = valor
+
+        # 1. Adiciona o pino azul padrão
+        pino_base = dl.Marker(
             position=config['lat_lon'],
             children=[
                 dl.Tooltip(config['nome']),
                 dl.Popup([
                     html.H5(config['nome']),
-                    html.P(f"Chuva (72h): {chuva_72h_pino:.1f} mm"),
+                    html.P(f"Status: {status_geral}"),
+                    html.P(f"Chuva (72h): {chuva_72h:.1f} mm"),
                     dbc.Button("Ver Dashboard", href=f"/ponto/{id_ponto}", size="sm", color="primary")
                 ])
             ]
         )
+        elementos_mapa.append(pino_base)
 
-        pinos_do_mapa.append(pino)
-    print(f"[map_view] update_map_pins: Gerados {len(pinos_do_mapa)} pinos.")
-    return pinos_do_mapa
+        # 2. Adiciona o círculo colorido na mesma posição do pino
+        circulo_status = dl.CircleMarker(
+            center=config['lat_lon'], # <-- REVERTIDO para a posição original
+            radius=12,
+            color='white',
+            weight=2,
+            fillColor=cor_circulo,
+            fillOpacity=0.9,
+            children=[
+                dl.Tooltip(
+                    f"{chuva_72h:.0f}",
+                    permanent=True,
+                    direction='center',
+                    className='leaflet-label-text'
+                )
+            ]
+        )
+        elementos_mapa.append(circulo_status)
+        
+    print(f"[map_view] Gerados {len(elementos_mapa)} elementos para o mapa (círculo na base).")
+    return elementos_mapa
 
 
 def create_km_block(id_ponto, config, df_ponto, status_ponto_info):
     """
     Cria o bloco de resumo com 4 cards (2x2): Chuva, Umidade, Incli X, Incli Y.
+    (Esta função permanece a mesma)
     """
     status_chuva_txt = status_ponto_info.get("chuva", "SEM DADOS")
     status_umid_txt = status_ponto_info.get("umidade", "SEM DADOS")

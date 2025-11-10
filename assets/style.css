@@ -1,5 +1,44 @@
 /* assets/style.css (COMPLETO E ATUALIZADO) */
 
+/* --- CLASSE PARA O CARD DE LOGIN (ALTURA DIMINUÍDA) --- */
+.login-card {
+    background-color: rgba(255, 255, 255, 0.2) !important; /* Fundo branco com 20% de opacidade */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    border-radius: 0.5rem;
+    padding: 1rem; /* --- ALTURA DIMINUÍDA (era 2rem) --- */
+}
+/* --- FIM DA CLASSE --- */
+
+/* --- CLASSE PARA O TÍTULO DO LOGIN (REVERTIDO PARA BRANCO) --- */
+.login-title {
+    color: white !important;
+    font-family: 'Roboto', sans-serif; /* Revertido para a fonte padrão */
+    font-weight: normal; /* Revertido para o peso padrão */
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5); /* Sombra para legibilidade */
+    text-transform: uppercase; /* Força o texto para maiúsculas */
+}
+/* --- FIM DA NOVA CLASSE --- */
+
+/* --- CLASSE PARA O TEXTO DO COPYRIGHT (AGORA BRANCO) --- */
+.copyright-text-yellow {
+    color: white !important; /* Alterado para branco */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6); /* Sombra para legibilidade */
+}
+/* --- FIM DA NOVA CLASSE --- */
+
+/* --- NOVA CLASSE PARA O TEXTO DENTRO DO CÍRCULO DO MAPA --- */
+.leaflet-label-text {
+    color: white;
+    font-weight: bold;
+    font-size: 10px;
+    text-shadow: 1px 1px 3px black;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+/* --- FIM DA NOVA CLASSE --- */
+
+
 /* --- NOVO: Fundo azul suave para a página de login --- */
 .bg-gemini-blue {
     background-color: #e6f0ff !important; /* Azul Gemini suave */
