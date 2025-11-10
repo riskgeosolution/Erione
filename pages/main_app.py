@@ -1,4 +1,4 @@
-# pages/main_app.py (CORREÇÃO FINAL: Sincroniza o Switch com o Estado Global)
+# pages/main_app.py (CORREÇÃO FINAL: Sincroniza o estado inicial do Switch e do Label)
 
 import dash
 from dash import html, dcc, callback, Input, Output
@@ -16,10 +16,14 @@ def get_navbar():
     cor_fundo_navbar = '#003366'
     nova_altura_logo = "50px"
 
-    # --- NOVO: Lê o estado inicial do arquivo ---
+    # --- LÊ O ESTADO INICIAL DO ARQUIVO DE CONFIGURAÇÃO ---
     importlib.reload(calibracao_base)
     initial_switch_value = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
-    # --- FIM NOVO ---
+    
+    # --- DEFINE O ESTADO INICIAL DO LABEL COM BASE NO VALOR DO SWITCH ---
+    initial_label_text = "ON" if initial_switch_value else "OFF"
+    initial_label_class = "ms-2 bg-light-green" if initial_switch_value else "ms-2"
+    # --- FIM DA CORREÇÃO ---
 
     navbar = dbc.Navbar(
         dbc.Container(
@@ -57,7 +61,14 @@ def get_navbar():
                                                     persistence=True,
                                                     persistence_type='session'
                                                 ),
-                                                dbc.InputGroupText(id='switch-api-label', children="OFF", style={'font-size': '0.8rem', 'font-weight': 'bold'}, className="text-white"),
+                                                # --- CORREÇÃO: Usa as variáveis de estado inicial ---
+                                                dbc.InputGroupText(
+                                                    id='switch-api-label',
+                                                    children=initial_label_text,
+                                                    style={'font-size': '0.8rem', 'font-weight': 'bold'},
+                                                    className=initial_label_class
+                                                ),
+                                                # --- FIM DA CORREÇÃO ---
                                             ],
                                             className="ms-4"
                                         ),

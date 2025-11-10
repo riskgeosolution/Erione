@@ -1,4 +1,4 @@
-# index.py (VERSÃO COM AUTOCALIBRAÇÃO E TIMER CORRIGIDO PARA PRODUÇÃO)
+# index.py (FINAL: Com Desligamento Automático por Inatividade)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -12,17 +12,13 @@ import time
 import datetime
 import traceback
 import importlib
+import threading
 
 import data_source
 import processamento
 import alertas
-import calibracao_base # Importa o arquivo de calibração
-import config # Importa o config para recarregar
-
-from config import (
-    PONTOS_DE_ANALISE, RISCO_MAP, FREQUENCIA_API_SEGUNDOS,
-    STATUS_MAP_HIERARQUICO
-)
+import calibracao_base
+import config
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,22 +29,20 @@ from pages import login as login_page, main_app as main_app_page, map_view, gene
 SENHA_CLIENTE = '123'
 SENHA_ADMIN = 'admin456'
 DELAY_SEGUNDOS = 60
+INACTIVITY_TIMEOUT_MINUTES = 60 # <-- TEMPO DE INATIVIDADE EM MINUTOS
 
-# --- NOVA FUNÇÃO PARA ATUALIZAR O ARQUIVO calibracao_base.py ---
+# --- FUNÇÕES DE CONTROLE DE ARQUIVO ---
 def _escrever_calibracao_base(bases_atuais_dict):
-    """Função auxiliar para reescrever o arquivo calibracao_base.py."""
     try:
         conteudo_arquivo = "# Arquivo para armazenar as bases de calibração e configurações dinâmicas.\n"
         conteudo_arquivo += "# Este arquivo pode ser modificado automaticamente pela aplicação.\n\n"
         conteudo_arquivo += "bases_atuais = {\n"
         for k, v in bases_atuais_dict.items():
-            # Formata booleanos e números corretamente
             if isinstance(v, bool):
                 conteudo_arquivo += f'  "{k}": {str(v).capitalize()},\n'
             else:
                 conteudo_arquivo += f'  "{k}": {v},\n'
         conteudo_arquivo += "}\n"
-
         with open("calibracao_base.py", "w", encoding='utf-8') as f:
             f.write(conteudo_arquivo)
         return True
@@ -57,26 +51,54 @@ def _escrever_calibracao_base(bases_atuais_dict):
         return False
 
 def atualizar_base_calibracao(chave, novo_valor):
-    """
-    Atualiza um valor no arquivo calibracao_base.py e o recarrega.
-    """
     try:
         importlib.reload(calibracao_base)
-        bases_atuais_dict = calibracao_base.bases_atuais.copy() # Cria uma cópia para modificar
-        
-        # Verifica se a chave existe e se o novo valor é realmente menor
+        bases_atuais_dict = calibracao_base.bases_atuais.copy()
         if chave in bases_atuais_dict and novo_valor < bases_atuais_dict[chave]:
             print(f"[Autocalibração] Atualizando base '{chave}': de {bases_atuais_dict[chave]} para {novo_valor}")
             bases_atuais_dict[chave] = novo_valor
-            
             if _escrever_calibracao_base(bases_atuais_dict):
-                importlib.reload(config) # Recarrega o config para usar as novas bases
+                importlib.reload(config)
                 return True
     except Exception as e:
         print(f"ERRO CRÍTICO ao autocalibrar a base: {e}")
     return False
-# --- FIM DA NOVA FUNÇÃO ---
 
+# --- VIGIA DE INATIVIDADE (NOVA LÓGICA) ---
+def vigia_de_inatividade():
+    """
+    Thread que verifica a inatividade e desliga a coleta de dados se necessário.
+    """
+    while True:
+        try:
+            # Espera 5 minutos antes de cada verificação
+            time.sleep(5 * 60) 
+            
+            importlib.reload(calibracao_base)
+            api_auto_ativada = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
+
+            # Se a API já está desligada, não faz nada
+            if not api_auto_ativada:
+                continue
+
+            # Lê o timestamp da última atividade
+            with open("ultima_atividade.txt", "r") as f:
+                last_activity_timestamp = float(f.read().strip())
+            
+            tempo_inativo_segundos = time.time() - last_activity_timestamp
+            
+            if tempo_inativo_segundos > INACTIVITY_TIMEOUT_MINUTES * 60:
+                print(f"[Vigia de Inatividade] Sistema inativo por mais de {INACTIVITY_TIMEOUT_MINUTES} minutos. Desligando coleta automática.")
+                
+                bases_atuais_dict = calibracao_base.bases_atuais.copy()
+                bases_atuais_dict["API_AUTO_ATIVADA"] = False
+                _escrever_calibracao_base(bases_atuais_dict)
+                importlib.reload(config)
+
+        except Exception as e:
+            print(f"ERRO no Vigia de Inatividade: {e}")
+
+# --- FIM DO VIGIA ---
 
 def worker_verificar_alertas(status_novos_dict, status_antigos_dict):
     default_status = {"geral": "INDEFINIDO", "chuva": "INDEFINIDO", "umidade": "INDEFINIDO", "inclinometro_x": "INDEFINIDO", "inclinometro_y": "INDEFINIDO"}
@@ -216,67 +238,54 @@ def toggle_interval_update(session_data):
     is_logged_in = session_data and session_data.get('logged_in', False)
     return not is_logged_in, not is_logged_in
 
-@app.callback([Output('store-dados-sessao', 'data'),Output('store-ultimo-status', 'data'),Output('store-logs-sessao', 'data')],[Input('intervalo-leitura-disco', 'n_intervals'),Input('trigger-atualizacao-dados', 'data')])
+# --- CALLBACK ATUALIZADO PARA REGISTRAR ATIVIDADE ---
+@app.callback(
+    [Output('store-dados-sessao', 'data'),
+     Output('store-ultimo-status', 'data'),
+     Output('store-logs-sessao', 'data')],
+    [Input('intervalo-leitura-disco', 'n_intervals'),
+     Input('trigger-atualizacao-dados', 'data')]
+)
 def update_data_and_logs_from_disk(n_intervals, trigger_data):
+    # Registra a "prova de vida"
+    try:
+        with open("ultima_atividade.txt", "w") as f:
+            f.write(str(time.time()))
+    except Exception as e:
+        print(f"ERRO ao escrever em ultima_atividade.txt: {e}")
+
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else "N/A"
     print(f"[Leitura Disco] Disparado por: {trigger_id}")
     df_completo, status_atual, logs = data_source.get_all_data_from_disk(worker_mode=False)
     dados_json_output = df_completo.to_json(date_format='iso', orient='split')
     return dados_json_output, status_atual, logs
+# --- FIM DA ATUALIZAÇÃO ---
 
-# --- CALLBACK DO SWITCH (CORRIGIDO PARA SER IDEMPOTENTE) ---
 @app.callback(
     [Output('store-intervalo-api-10min', 'data'),
      Output('switch-api-label', 'children'),
      Output('switch-api-label', 'className')],
     Input('switch-api-auto', 'value'),
-    State('store-intervalo-api-10min', 'data'), # <-- NOVO STATE
     prevent_initial_call=True
 )
-def toggle_api_timer(switch_on, current_interval):
-    # Converte o valor do switch para o valor de intervalo correspondente
-    new_interval = 10 * 60 * 1000 if switch_on else 0
-    
-    # Só atualiza se o novo estado for diferente do estado atual
-    if new_interval == current_interval:
-        # Recarrega o calibracao_base para pegar o estado global
-        importlib.reload(calibracao_base)
-        api_auto_ativada_global = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
-        
-        # Se o estado global já corresponde ao que o switch está tentando definir, não faz nada
-        if (switch_on and api_auto_ativada_global) or (not switch_on and not api_auto_ativada_global):
-            raise PreventUpdate # Evita atualização desnecessária
-        
-        # Se o estado global não corresponde, significa que outro usuário mudou.
-        # Atualiza o switch local para refletir o estado global.
-        # Isso é um pouco complexo, pois um Output não pode ser um Input.
-        # Por enquanto, vamos deixar o PreventUpdate e resolver isso no próximo passo se for um problema.
-        # A prioridade é que o estado global seja o mestre.
-        
-        # Se o switch local está ON mas o global está OFF, ou vice-versa,
-        # precisamos forçar o switch local a refletir o global.
-        # Isso será tratado no próximo passo, por enquanto, PreventUpdate.
-        pass # A lógica de PreventUpdate já está acima
-        
-    # --- Lógica para atualizar o arquivo calibracao_base.py ---
+def toggle_api_timer(switch_on):
     importlib.reload(calibracao_base)
     bases_atuais_dict = calibracao_base.bases_atuais.copy()
     
-    # Atualiza o estado global no arquivo
+    if bases_atuais_dict.get("API_AUTO_ATIVADA") == switch_on:
+        raise PreventUpdate
+
     bases_atuais_dict["API_AUTO_ATIVADA"] = switch_on
     _escrever_calibracao_base(bases_atuais_dict)
-    
-    # Recarrega o config para que a próxima execução use o estado global atualizado
     importlib.reload(config)
 
     if switch_on:
         print("[API Timer] Ligado. Próxima busca em 10 min.")
-        return new_interval, "ON", "ms-2 bg-light-green"
+        return 10 * 60 * 1000, "ON", "ms-2 bg-light-green"
     else:
         print("[API Timer] Desligado.")
-        return new_interval, "OFF", "ms-2"
-# --- FIM DA CORREÇÃO ---
+        return 0, "OFF", "ms-2"
 
 def get_proxima_execucao():
     INTERVALO_MINUTOS = 10
@@ -295,30 +304,13 @@ def get_proxima_execucao():
         proxima_execucao_final = proxima_execucao_base + datetime.timedelta(seconds=ATRASO_ADICIONAL_SEGUNDOS)
     return proxima_execucao_final
 
-@app.callback([Output('store-tempo-restante', 'data', allow_duplicate=True),Output('dummy-output', 'children', allow_duplicate=True)],Input('intervalo-countdown-1s', 'n_intervals'),[State('store-intervalo-api-10min', 'data'),State('store-tempo-restante', 'data')],prevent_initial_call=True)
-def update_sync_time(n_intervals, interval_ms, current_store_data):
-    # --- NOVO: LÊ O ESTADO GLOBAL DO ARQUIVO ---
+@app.callback([Output('store-tempo-restante', 'data', allow_duplicate=True),Output('dummy-output', 'children', allow_duplicate=True)],Input('intervalo-countdown-1s', 'n_intervals'),[State('store-tempo-restante', 'data')],prevent_initial_call=True)
+def update_sync_time(n_intervals, current_store_data):
     importlib.reload(calibracao_base)
     api_auto_ativada_global = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
     
-    # Se o estado global está desligado, o timer deve parar.
     if not api_auto_ativada_global:
         return {'texto': "API Desligada (Global)", 'countdown_s': -1, 'last_sync_s': 0}, ""
-
-    # Se o estado global está ligado, mas o switch local está desligado (interval_ms == 0),
-    # significa que o switch local ainda não foi atualizado ou está em estado inconsistente.
-    # Neste caso, o timer deve continuar a contar, pois o estado global é o mestre.
-    # A lógica de update_sync_time deve usar o interval_ms do store, que é atualizado pelo toggle_api_timer
-    # que por sua vez, agora escreve no arquivo.
-    # Apenas para garantir, se o global está ON, o local também deveria estar.
-    # Se o interval_ms é 0, mas o global está ON, isso é uma inconsistência.
-    # Vamos forçar o timer a continuar se o global está ON.
-    if interval_ms == 0 and api_auto_ativada_global:
-        # Isso significa que o switch local está OFF, mas o global está ON.
-        # Vamos forçar o timer a continuar como se estivesse ON.
-        interval_ms = 10 * 60 * 1000 # Força o valor para ON
-        print("[Timer Sync] Inconsistência detectada: Global ON, Local OFF. Forçando timer ON.")
-        # Não precisamos PreventUpdate aqui, pois queremos que o timer continue.
 
     AGORA_UTC = datetime.datetime.now(datetime.timezone.utc)
     current_s = current_store_data.get('countdown_s', 0)
@@ -345,14 +337,11 @@ def update_sync_time(n_intervals, interval_ms, current_store_data):
 @app.callback(Output('trigger-atualizacao-dados', 'data'),Input('store-tempo-restante', 'data'),prevent_initial_call=True)
 def callback_disparador_api(data_store):
     if data_store and data_store.get('countdown_s') == -2:
-        # --- NOVO: VERIFICA O ESTADO GLOBAL ANTES DE DISPARAR ---
         importlib.reload(calibracao_base)
         api_auto_ativada_global = calibracao_base.bases_atuais.get("API_AUTO_ATIVADA", False)
         if not api_auto_ativada_global:
             print("[API Timer] Tentativa de disparo, mas API desativada globalmente. Abortando.")
-            return dash.no_update # Não dispara se estiver desligado globalmente
-        # --- FIM DO NOVO ---
-
+            return dash.no_update
         print(f"[API Timer] Disparado por Store. Iniciando busca em background...")
         try:
             sucesso = on_demand_main_loop()
@@ -374,6 +363,13 @@ def display_sync_time(data):
 
 if __name__ == '__main__':
     data_source.setup_disk_paths()
+    
+    # --- INICIA A THREAD DO VIGIA ---
+    vigia_thread = threading.Thread(target=vigia_de_inatividade, daemon=True)
+    vigia_thread.start()
+    print("[Vigia de Inatividade] Iniciado.")
+    # --- FIM ---
+    
     host = '127.0.0.1'
     port = 8050
     print(f"Iniciando o servidor Dash (WEB) em http://{host}:{port}/")

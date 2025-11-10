@@ -1,4 +1,4 @@
-# gerador_pdf.py (REESCRITO COM LÓGICA DIRETA)
+# gerador_pdf.py (CORREÇÃO FINAL E DEFINITIVA v6)
 
 import io
 from fpdf import FPDF, Align
@@ -18,7 +18,6 @@ import matplotlib
 
 matplotlib.use('Agg')
 
-# O cache de tarefas em background é mantido apenas para o Excel
 EXCEL_CACHE = {}
 EXCEL_CACHE_LOCK = threading.Lock()
 
