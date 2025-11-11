@@ -24,7 +24,7 @@ load_dotenv()
 from app import app, server
 from pages import login as login_page, main_app as main_app_page, map_view, general_dash, specific_dash
 
-SENHA_CLIENTE = '123'
+SENHA_CLIENTE = '@Erione'
 SENHA_ADMIN = 'admin456'
 DELAY_SEGUNDOS = 60
 
