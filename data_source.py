@@ -1,4 +1,4 @@
-# data_source.py (COMPLETO: v9 - Com autoinicialização do DB)
+# data_source.py (COMPLETO: v10 - Corrigida sintaxe SQL para PostgreSQL)
 
 import pandas as pd
 import json
@@ -215,8 +215,6 @@ def get_engine():
     return create_engine(DB_CONNECTION_STRING)
 
 
-# --- FUNÇÃO _init_state_table (ALTERADA) ---
-# Agora é chamada por get_app_state se a tabela não existir
 def _init_state_table(engine):
     DB_STATE_TABLE = "app_state"
     try:
@@ -228,9 +226,10 @@ def _init_state_table(engine):
                 );
             """))
             for key, value in VALORES_PADRAO_ESTADO.items():
+                # --- CORREÇÃO DA SINTAXE DE PARÂMETRO ---
                 connection.execute(text(f"""
                     INSERT INTO {DB_STATE_TABLE} (key, value)
-                    VALUES (:key, :value)
+                    VALUES (%(key)s, %(value)s)
                     ON CONFLICT(key) DO NOTHING;
                 """), {"key": key, "value": value})
             connection.commit()
@@ -241,26 +240,23 @@ def _init_state_table(engine):
         return False
 
 
-# --- FUNÇÃO get_app_state (ALTERADA) ---
-# Agora ela mesma cria a tabela 'app_state' se ela não existir
 def get_app_state(key):
     DB_STATE_TABLE = "app_state"
     engine = get_engine()
     try:
         with engine.connect() as connection:
-            result = connection.execute(text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = :key"), {"key": key})
+            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO ---
+            result = connection.execute(text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = %(key)s"), {"key": key})
             value = result.scalar()
             if value is None:
                 default_value = VALORES_PADRAO_ESTADO.get(key)
                 return default_value
             return value
     except (exc.OperationalError, exc.ProgrammingError) as e:
-        # Erro (psycopg2.errors.UndefinedTable) é um ProgrammingError
         if "does not exist" in str(e) or "no such table" in str(e):
             print(f"AVISO: Tabela 'app_state' não existe, criando agora...")
-            # Chama a função de criação da tabela E TENTA DE NOVO
             if _init_state_table(engine):
-                return get_app_state(key)  # Tenta novamente
+                return get_app_state(key)
 
         print(f"AVISO: Não foi possível ler o estado do DB ({e}). Retornando padrão.")
         return VALORES_PADRAO_ESTADO.get(key)
@@ -274,10 +270,11 @@ def set_app_state(key, value):
     engine = get_engine()
     try:
         with engine.connect() as connection:
+            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO ---
             connection.execute(text(f"""
                 INSERT INTO {DB_STATE_TABLE} (key, value)
-                VALUES (:key, :value)
-                ON CONFLICT(key) DO UPDATE SET value = :value;
+                VALUES (%(key)s, %(value)s)
+                ON CONFLICT(key) DO UPDATE SET value = %(value)s;
             """), {"key": key, "value": str(value)})
             connection.commit()
         return True
@@ -285,14 +282,12 @@ def set_app_state(key, value):
         if "does not exist" in str(e) or "no such table" in str(e):
             print(f"AVISO: Tabela 'app_state' não existe, criando agora...")
             if _init_state_table(engine):
-                return set_app_state(key, value)  # Tenta novamente
+                return set_app_state(key, value)
     except Exception as e:
         print(f"ERRO ao salvar estado '{key}': {e}")
         return False
 
 
-# --- FUNÇÃO _init_historico_table (NOVA) ---
-# Separamos a lógica de criação da tabela de histórico
 def _init_historico_table(engine):
     try:
         print(f"[DB] Tabela '{DB_TABLE_NAME}' não encontrada. Criando...")
@@ -325,7 +320,6 @@ def save_to_db(df_novos_dados):
         engine = get_engine()
         inspector = inspect(engine)
 
-        # Garante que AMBAS as tabelas existam
         if not inspector.has_table("app_state"):
             _init_state_table(engine)
         if not inspector.has_table(DB_TABLE_NAME):
@@ -346,19 +340,19 @@ def save_to_db(df_novos_dados):
         traceback.print_exc()
 
 
-# --- FUNÇÃO read_data_from_db (ALTERADA) ---
-# Agora ela mesma cria a tabela de histórico se não existir
 def read_data_from_db(id_ponto, start_dt, end_dt):
     print(f"[DB] Consultando dados para {id_ponto} de {start_dt} a {end_dt}")
     engine = get_engine()
 
     start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    # --- CORREÇÃO DA SINTAXE DE PARÂMETRO ---
     query = f"""
         SELECT * FROM {DB_TABLE_NAME}
-        WHERE id_ponto = :ponto
-        AND timestamp >= :start
-        AND timestamp < :end
+        WHERE id_ponto = %(ponto)s
+        AND timestamp >= %(start)s
+        AND timestamp < %(end)s
         ORDER BY timestamp ASC
     """
     try:
@@ -379,7 +373,7 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
         if "does not exist" in str(e) or "no such table" in str(e):
             print(f"AVISO: Tabela '{DB_TABLE_NAME}' não existe, criando agora...")
             if _init_historico_table(engine):
-                return read_data_from_db(id_ponto, start_dt, end_dt)  # Tenta novamente
+                return read_data_from_db(id_ponto, start_dt, end_dt)
 
         print(f"ERRO CRÍTICO ao ler do DB: {e}")
         adicionar_log("GERAL", f"ERRO CRÍTICO ao ler do DB: {e}")
@@ -391,11 +385,9 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
 
 
 # ==========================================================
-# --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD (ALTERADA) ---
+# --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD ---
 # ==========================================================
 def get_all_data_from_disk(worker_mode=False):
-    # 'worker_mode' não é mais relevante, mas deixamos para compatibilidade
-
     print("[Dashboard] Lendo dados para o dashboard A PARTIR DO DB (Últimos 14 dias)...")
     agora_utc = datetime.datetime.now(datetime.timezone.utc)
     end_dt = agora_utc
@@ -438,7 +430,7 @@ def get_all_data_from_disk(worker_mode=False):
 
 
 # ==========================================================
-# --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO (ALTERADA) ---
+# --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO ---
 # ==========================================================
 def executar_passo_api_e_salvar(historico_df_existente):
     try:
