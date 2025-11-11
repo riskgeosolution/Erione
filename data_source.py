@@ -1,4 +1,4 @@
-# data_source.py (COMPLETO: Alterado para PostgreSQL e tabela de estado)
+# data_source.py (COMPLETO: v9 - Com autoinicialização do DB)
 
 import pandas as pd
 import json
@@ -23,10 +23,8 @@ from config import (
     DB_TABLE_NAME
 )
 
-# --- Configurações de Disco (Caminhos) ---
-# Estes arquivos (status e log) serão TEMPORÁRIOS no Render (e tudo bem)
 DATA_DIR = "."
-HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")  # Não será mais usado para dados
+HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")
 STATUS_FILE = os.path.join(DATA_DIR, "status_atual.json")
 LOG_FILE = os.path.join(DATA_DIR, "eventos.log")
 LAST_UPDATE_FILE = os.path.join(DATA_DIR, "last_api_update.json")
@@ -40,7 +38,6 @@ COLUNAS_HISTORICO = [
 
 PLUGFIELD_TOKEN_CACHE = {}
 
-# --- NOVOS VALORES PADRÃO (Substituindo calibracao_base.py) ---
 VALORES_PADRAO_ESTADO = {
     "API_AUTO_ATIVADA": "False",
     "UMIDADE_BASE_1M": "26.8",
@@ -51,11 +48,9 @@ VALORES_PADRAO_ESTADO = {
 }
 
 
-# -----------------------------------------------
+# (As funções _get_plugfield_token, _fetch_plugfield_sensor_data,
+#  fetch_and_process_plugfield_data e adicionar_log permanecem idênticas)
 
-# ==========================================================
-# --- FUNÇÕES AUXILIARES DA API (Sem alterações) ---
-# ==========================================================
 def _get_plugfield_token(id_ponto):
     global PLUGFIELD_TOKEN_CACHE
     if id_ponto in PLUGFIELD_TOKEN_CACHE:
@@ -115,10 +110,7 @@ def _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_ms
 def fetch_and_process_plugfield_data(df_historico_existente):
     logs_api = []
     lista_dataframes_finais = []
-
-    # --- ALTERAÇÃO: Busca 72h se o DB estiver vazio ---
     DATA_INICIO_PADRAO = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=72)
-    # --- FIM DA ALTERAÇÃO ---
 
     for id_ponto, config in PONTOS_DE_ANALISE.items():
         print(f"[API Plugfield] Iniciando coleta para: {id_ponto}")
@@ -140,7 +132,6 @@ def fetch_and_process_plugfield_data(df_historico_existente):
         df_ponto_existente = df_historico_existente[df_historico_existente['id_ponto'] == id_ponto]
         agora_utc = datetime.datetime.now(datetime.timezone.utc)
 
-        # --- ALTERAÇÃO: Lógica de data de início ---
         if df_ponto_existente.empty:
             start_dt_utc = DATA_INICIO_PADRAO
             print(f"[API Plugfield] Histórico vazio. Buscando dados desde {start_dt_utc.isoformat()} (72h atrás).")
@@ -149,7 +140,6 @@ def fetch_and_process_plugfield_data(df_historico_existente):
             if start_dt_utc < DATA_INICIO_PADRAO:
                 start_dt_utc = DATA_INICIO_PADRAO
             print(f"[API Plugfield] Buscando dados desde {start_dt_utc.isoformat()}")
-        # --- FIM DA ALTERAÇÃO ---
 
         start_dt_utc += datetime.timedelta(seconds=1)
         end_time_ms = int(agora_utc.timestamp() * 1000)
@@ -197,9 +187,6 @@ def fetch_and_process_plugfield_data(df_historico_existente):
     return df_resultado_final, logs_api
 
 
-# ==========================================================
-# --- FUNÇÕES DE LOG E CONFIGURAÇÃO DE CAMINHO ---
-# ==========================================================
 def adicionar_log(id_ponto, mensagem):
     try:
         log_entry = f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} | {id_ponto} | {mensagem}\n"
@@ -212,16 +199,10 @@ def adicionar_log(id_ponto, mensagem):
 def setup_disk_paths():
     print("--- data_source.py (Modo PostgreSQL) ---")
     global DATA_DIR, STATUS_FILE, LOG_FILE, HISTORICO_FILE_CSV, DB_CONNECTION_STRING, LAST_UPDATE_FILE
-
-    # --- ALTERAÇÃO: Remove a lógica do RENDER e do DISCO ---
-    # O DB_CONNECTION_STRING virá 100% da variável de ambiente
-    # Os arquivos de log/status serão salvos localmente (e serão temporários no Render)
     DATA_DIR = "."
-    # --- FIM DA ALTERAÇÃO ---
-
     STATUS_FILE = os.path.join(DATA_DIR, "status_atual.json")
     LOG_FILE = os.path.join(DATA_DIR, "eventos.log")
-    HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")  # Não mais usado
+    HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")
     LAST_UPDATE_FILE = os.path.join(DATA_DIR, "last_api_update.json")
     print(f"Caminho do Disco de Dados (Temporário): {DATA_DIR}")
     print(f"Banco de Dados (Escrita): {DB_CONNECTION_STRING}")
@@ -231,25 +212,21 @@ def setup_disk_paths():
 # --- FUNÇÕES DE BANCO de DADOS (ALTERADAS) ---
 # ==========================================================
 def get_engine():
-    # Esta função agora é a única fonte do engine.
-    # DB_CONNECTION_STRING é pego do os.getenv("DATABASE_URL") em config.py
     return create_engine(DB_CONNECTION_STRING)
 
 
-# --- NOVA FUNÇÃO: Gerencia a tabela de estado (app_state) ---
+# --- FUNÇÃO _init_state_table (ALTERADA) ---
+# Agora é chamada por get_app_state se a tabela não existir
 def _init_state_table(engine):
-    """Garante que a tabela app_state exista e tenha valores padrão."""
     DB_STATE_TABLE = "app_state"
     try:
         with engine.connect() as connection:
-            # Tenta criar a tabela
             connection.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS {DB_STATE_TABLE} (
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
             """))
-            # Popula com valores padrão (apenas se não existirem)
             for key, value in VALORES_PADRAO_ESTADO.items():
                 connection.execute(text(f"""
                     INSERT INTO {DB_STATE_TABLE} (key, value)
@@ -257,28 +234,34 @@ def _init_state_table(engine):
                     ON CONFLICT(key) DO NOTHING;
                 """), {"key": key, "value": value})
             connection.commit()
-        print(f"[DB] Tabela '{DB_STATE_TABLE}' inicializada.")
+        print(f"[DB] Tabela '{DB_STATE_TABLE}' inicializada com sucesso.")
+        return True
     except Exception as e:
         print(f"ERRO CRÍTICO ao inicializar a tabela de estado: {e}")
+        return False
 
 
-# --- NOVAS FUNÇÕES: get/set para o estado (substitui calibracao_base.py) ---
+# --- FUNÇÃO get_app_state (ALTERADA) ---
+# Agora ela mesma cria a tabela 'app_state' se ela não existir
 def get_app_state(key):
-    """Busca um valor da tabela de estado (ex: 'API_AUTO_ATIVADA')"""
     DB_STATE_TABLE = "app_state"
     engine = get_engine()
     try:
         with engine.connect() as connection:
             result = connection.execute(text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = :key"), {"key": key})
-            value = result.scalar()  # Retorna o primeiro valor da primeira linha
+            value = result.scalar()
             if value is None:
-                # Se a chave não existe, retorna o padrão e tenta salvar
                 default_value = VALORES_PADRAO_ESTADO.get(key)
-                set_app_state(key, default_value)  # Tenta criar
                 return default_value
             return value
-    except exc.OperationalError as e:
-        # Erro comum se o DB não existe (ex: teste local sem postgres)
+    except (exc.OperationalError, exc.ProgrammingError) as e:
+        # Erro (psycopg2.errors.UndefinedTable) é um ProgrammingError
+        if "does not exist" in str(e) or "no such table" in str(e):
+            print(f"AVISO: Tabela 'app_state' não existe, criando agora...")
+            # Chama a função de criação da tabela E TENTA DE NOVO
+            if _init_state_table(engine):
+                return get_app_state(key)  # Tenta novamente
+
         print(f"AVISO: Não foi possível ler o estado do DB ({e}). Retornando padrão.")
         return VALORES_PADRAO_ESTADO.get(key)
     except Exception as e:
@@ -287,12 +270,10 @@ def get_app_state(key):
 
 
 def set_app_state(key, value):
-    """Salva um valor na tabela de estado (ex: 'API_AUTO_ATIVADA', 'True')"""
     DB_STATE_TABLE = "app_state"
     engine = get_engine()
     try:
         with engine.connect() as connection:
-            # ON CONFLICT(key) DO UPDATE é o "upsert" (cria se não existe, atualiza se existe)
             connection.execute(text(f"""
                 INSERT INTO {DB_STATE_TABLE} (key, value)
                 VALUES (:key, :value)
@@ -300,12 +281,41 @@ def set_app_state(key, value):
             """), {"key": key, "value": str(value)})
             connection.commit()
         return True
+    except (exc.OperationalError, exc.ProgrammingError) as e:
+        if "does not exist" in str(e) or "no such table" in str(e):
+            print(f"AVISO: Tabela 'app_state' não existe, criando agora...")
+            if _init_state_table(engine):
+                return set_app_state(key, value)  # Tenta novamente
     except Exception as e:
         print(f"ERRO ao salvar estado '{key}': {e}")
         return False
 
 
-# --- FIM DAS NOVAS FUNÇÕES DE ESTADO ---
+# --- FUNÇÃO _init_historico_table (NOVA) ---
+# Separamos a lógica de criação da tabela de histórico
+def _init_historico_table(engine):
+    try:
+        print(f"[DB] Tabela '{DB_TABLE_NAME}' não encontrada. Criando...")
+        colunas_db = {
+            'timestamp': 'TIMESTAMP', 'id_ponto': 'TEXT', 'chuva_mm': 'REAL',
+            'precipitacao_acumulada_mm': 'REAL', 'umidade_1m_perc': 'REAL',
+            'umidade_2m_perc': 'REAL', 'umidade_3m_perc': 'REAL',
+            'base_1m': 'REAL', 'base_2m': 'REAL', 'base_3m': 'REAL',
+            'inclinometro_x': 'REAL', 'inclinometro_y': 'REAL'
+        }
+        create_query = f"CREATE TABLE {DB_TABLE_NAME} (\n"
+        create_query += ",\n".join([f'"{col}" {tipo}' for col, tipo in colunas_db.items()])
+        create_query += f",\nUNIQUE(id_ponto, \"timestamp\")\n);"
+
+        with engine.connect() as connection:
+            connection.execute(text(create_query))
+            connection.commit()
+        print(f"[DB] Tabela '{DB_TABLE_NAME}' criada com sucesso.")
+        return True
+    except Exception as e:
+        print(f"ERRO CRÍTICO ao criar tabela de histórico: {e}")
+        traceback.print_exc()
+        return False
 
 
 def save_to_db(df_novos_dados):
@@ -315,41 +325,20 @@ def save_to_db(df_novos_dados):
         engine = get_engine()
         inspector = inspect(engine)
 
-        # --- ALTERAÇÃO: Inicializa a tabela de estado também ---
+        # Garante que AMBAS as tabelas existam
         if not inspector.has_table("app_state"):
             _init_state_table(engine)
-        # --- FIM DA ALTERAÇÃO ---
-
         if not inspector.has_table(DB_TABLE_NAME):
-            print(f"[DB] Tabela '{DB_TABLE_NAME}' não encontrada. Criando...")
-            # (A definição da tabela de histórico permanece a mesma)
-            colunas_db = {
-                'timestamp': 'TIMESTAMP', 'id_ponto': 'TEXT', 'chuva_mm': 'REAL',
-                'precipitacao_acumulada_mm': 'REAL', 'umidade_1m_perc': 'REAL',
-                'umidade_2m_perc': 'REAL', 'umidade_3m_perc': 'REAL',
-                'base_1m': 'REAL', 'base_2m': 'REAL', 'base_3m': 'REAL',
-                'inclinometro_x': 'REAL', 'inclinometro_y': 'REAL'
-            }
-            # Sintaxe do PostgreSQL é um pouco diferente para UNIQUE
-            create_query = f"CREATE TABLE {DB_TABLE_NAME} (\n"
-            create_query += ",\n".join([f'"{col}" {tipo}' for col, tipo in colunas_db.items()])
-            create_query += f",\nUNIQUE(id_ponto, \"timestamp\")\n);"
-
-            with engine.connect() as connection:
-                connection.execute(text(create_query))
-                connection.commit()
-            print(f"[DB] Tabela '{DB_TABLE_NAME}' criada com sucesso.")
+            _init_historico_table(engine)
 
         cols_tabela_db = [col['name'] for col in inspector.get_columns(DB_TABLE_NAME)]
         cols_para_salvar = [col for col in df_novos_dados.columns if col in cols_tabela_db]
         df_para_salvar = df_novos_dados[cols_para_salvar]
 
-        # Usar 'to_sql' com PostgreSQL pode ser lento.
-        # Uma inserção direta é mais robusta se 'to_sql' falhar.
         df_para_salvar.to_sql(DB_TABLE_NAME, engine, if_exists='append', index=False, method=None)
 
         print(f"[DB] {len(df_para_salvar)} novos pontos salvos no DB.")
-    except exc.IntegrityError:  # Erro de 'UNIQUE constraint failed'
+    except exc.IntegrityError:
         print(f"[DB] Aviso: Dados duplicados para este timestamp. Ignorando.")
     except Exception as e:
         adicionar_log("GERAL", f"ERRO CRÍTICO ao salvar no DB: {e}")
@@ -357,18 +346,11 @@ def save_to_db(df_novos_dados):
         traceback.print_exc()
 
 
-# (Função migrar_csv_to_sqlite_initial removida)
-
+# --- FUNÇÃO read_data_from_db (ALTERADA) ---
+# Agora ela mesma cria a tabela de histórico se não existir
 def read_data_from_db(id_ponto, start_dt, end_dt):
     print(f"[DB] Consultando dados para {id_ponto} de {start_dt} a {end_dt}")
     engine = get_engine()
-    inspector = inspect(engine)
-    if not inspector.has_table(DB_TABLE_NAME):
-        print(f"[DB] Tabela '{DB_TABLE_NAME}' não existe. Retornando vazio.")
-        # --- ALTERAÇÃO: Tenta criar as tabelas se não existirem ---
-        save_to_db(pd.DataFrame())  # Chama a função com DF vazio para forçar a criação da tabela
-        # --- FIM DA ALTERAÇÃO ---
-        return pd.DataFrame(columns=COLUNAS_HISTORICO)
 
     start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -393,23 +375,26 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
             if col not in df.columns:
                 df[col] = pd.NA
         return df[COLUNAS_HISTORICO]
+    except (exc.OperationalError, exc.ProgrammingError) as e:
+        if "does not exist" in str(e) or "no such table" in str(e):
+            print(f"AVISO: Tabela '{DB_TABLE_NAME}' não existe, criando agora...")
+            if _init_historico_table(engine):
+                return read_data_from_db(id_ponto, start_dt, end_dt)  # Tenta novamente
+
+        print(f"ERRO CRÍTICO ao ler do DB: {e}")
+        adicionar_log("GERAL", f"ERRO CRÍTICO ao ler do DB: {e}")
+        return pd.DataFrame(columns=COLUNAS_HISTORICO)
     except Exception as e:
         print(f"ERRO CRÍTICO ao ler do DB: {e}")
         adicionar_log("GERAL", f"ERRO CRÍTICO ao ler do DB: {e}")
         return pd.DataFrame(columns=COLUNAS_HISTORICO)
 
 
-# (Funções de CSV e Sincronia removidas ou não são mais necessárias)
-
-
 # ==========================================================
 # --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD (ALTERADA) ---
 # ==========================================================
 def get_all_data_from_disk(worker_mode=False):
-    """
-    Lê os dados do banco de dados (PostgreSQL).
-    A lógica de CSV (worker_mode=True) foi removida.
-    """
+    # 'worker_mode' não é mais relevante, mas deixamos para compatibilidade
 
     print("[Dashboard] Lendo dados para o dashboard A PARTIR DO DB (Últimos 14 dias)...")
     agora_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -417,7 +402,6 @@ def get_all_data_from_disk(worker_mode=False):
     start_dt = agora_utc - datetime.timedelta(days=14)
     lista_dfs = []
     for id_ponto in PONTOS_DE_ANALISE.keys():
-        # A função read_data_from_db agora lê do Postgres
         df_ponto = read_data_from_db(id_ponto, start_dt, end_dt)
         if not df_ponto.empty:
             lista_dfs.append(df_ponto)
@@ -428,7 +412,6 @@ def get_all_data_from_disk(worker_mode=False):
         print("[Dashboard] Nenhum dado encontrado no DB para o período.")
         historico_df = pd.DataFrame(columns=COLUNAS_HISTORICO)
 
-    # (A lógica de ler status.json e eventos.log permanece, são arquivos temporários)
     default_status = {
         "geral": "INDEFINIDO", "chuva": "INDEFINIDO", "umidade": "INDEFINIDO",
         "inclinometro_x": "INDEFINIDO", "inclinometro_y": "INDEFINIDO"
@@ -458,10 +441,6 @@ def get_all_data_from_disk(worker_mode=False):
 # --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO (ALTERADA) ---
 # ==========================================================
 def executar_passo_api_e_salvar(historico_df_existente):
-    """
-    historico_df_existente é lido do DB (não mais do CSV).
-    Salva os novos dados no DB (não mais no CSV).
-    """
     try:
         dados_api_df, logs_api = fetch_and_process_plugfield_data(historico_df_existente)
         status_novos = None
@@ -484,15 +463,7 @@ def executar_passo_api_e_salvar(historico_df_existente):
             if col not in dados_api_df.columns:
                 dados_api_df[col] = pd.NA
 
-        # --- ALTERAÇÃO: Salva no DB (Postgres) ---
         save_to_db(dados_api_df)
-
-        # --- REMOVIDO: Não salva mais no CSV ---
-        # historico_atualizado_df_csv = pd.concat([historico_df_csv, dados_api_df], ignore_index=True)
-        # save_historico_to_csv(historico_atualizado_df_csv)
-
-        # --- REMOVIDO: Não salva mais o last_api_update.json ---
-        # (A lógica agora é "buscar desde o último timestamp no DB")
 
         return dados_api_df, status_novos
     except Exception as e:
