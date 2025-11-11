@@ -1,4 +1,4 @@
-# data_source.py (COMPLETO: Ordem de Funções Corrigida para NameError)
+# data_source.py (COMPLETO: Alterado para PostgreSQL e tabela de estado)
 
 import pandas as pd
 import json
@@ -8,13 +8,13 @@ import httpx
 import traceback
 import warnings
 import time
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, exc
 from io import StringIO
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 from config import (
-    PONTOS_DE_ANALISE, CONSTANTES_PADRAO,
+    PONTOS_DE_ANALISE,
     FREQUENCIA_API_SEGUNDOS,
     MAX_HISTORICO_PONTOS,
     PLUGFIELD_CONFIG,
@@ -24,8 +24,9 @@ from config import (
 )
 
 # --- Configurações de Disco (Caminhos) ---
+# Estes arquivos (status e log) serão TEMPORÁRIOS no Render (e tudo bem)
 DATA_DIR = "."
-HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")
+HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")  # Não será mais usado para dados
 STATUS_FILE = os.path.join(DATA_DIR, "status_atual.json")
 LOG_FILE = os.path.join(DATA_DIR, "eventos.log")
 LAST_UPDATE_FILE = os.path.join(DATA_DIR, "last_api_update.json")
@@ -39,11 +40,22 @@ COLUNAS_HISTORICO = [
 
 PLUGFIELD_TOKEN_CACHE = {}
 
+# --- NOVOS VALORES PADRÃO (Substituindo calibracao_base.py) ---
+VALORES_PADRAO_ESTADO = {
+    "API_AUTO_ATIVADA": "False",
+    "UMIDADE_BASE_1M": "26.8",
+    "UMIDADE_BASE_2M": "16.2",
+    "UMIDADE_BASE_3M": "13.4",
+    "INCLINOMETRO_BASE_X": "-17.7",
+    "INCLINOMETRO_BASE_Y": "8.3",
+}
+
+
+# -----------------------------------------------
 
 # ==========================================================
-# --- FUNÇÕES AUXILIARES DA API (MOVIDAS PARA O TOPO) ---
+# --- FUNÇÕES AUXILIARES DA API (Sem alterações) ---
 # ==========================================================
-
 def _get_plugfield_token(id_ponto):
     global PLUGFIELD_TOKEN_CACHE
     if id_ponto in PLUGFIELD_TOKEN_CACHE:
@@ -103,7 +115,11 @@ def _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_ms
 def fetch_and_process_plugfield_data(df_historico_existente):
     logs_api = []
     lista_dataframes_finais = []
-    DATA_INICIO_FIXA = datetime.datetime(2025, 11, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+
+    # --- ALTERAÇÃO: Busca 72h se o DB estiver vazio ---
+    DATA_INICIO_PADRAO = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=72)
+    # --- FIM DA ALTERAÇÃO ---
+
     for id_ponto, config in PONTOS_DE_ANALISE.items():
         print(f"[API Plugfield] Iniciando coleta para: {id_ponto}")
         try:
@@ -123,14 +139,18 @@ def fetch_and_process_plugfield_data(df_historico_existente):
 
         df_ponto_existente = df_historico_existente[df_historico_existente['id_ponto'] == id_ponto]
         agora_utc = datetime.datetime.now(datetime.timezone.utc)
+
+        # --- ALTERAÇÃO: Lógica de data de início ---
         if df_ponto_existente.empty:
-            start_dt_utc = DATA_INICIO_FIXA
-            print(f"[API Plugfield] Histórico vazio. Buscando dados desde {start_dt_utc.isoformat()}.")
+            start_dt_utc = DATA_INICIO_PADRAO
+            print(f"[API Plugfield] Histórico vazio. Buscando dados desde {start_dt_utc.isoformat()} (72h atrás).")
         else:
             start_dt_utc = df_ponto_existente['timestamp'].max()
-            if start_dt_utc < DATA_INICIO_FIXA:
-                start_dt_utc = DATA_INICIO_FIXA
+            if start_dt_utc < DATA_INICIO_PADRAO:
+                start_dt_utc = DATA_INICIO_PADRAO
             print(f"[API Plugfield] Buscando dados desde {start_dt_utc.isoformat()}")
+        # --- FIM DA ALTERAÇÃO ---
+
         start_dt_utc += datetime.timedelta(seconds=1)
         end_time_ms = int(agora_utc.timestamp() * 1000)
         start_time_ms = int(start_dt_utc.timestamp() * 1000)
@@ -190,36 +210,119 @@ def adicionar_log(id_ponto, mensagem):
 
 
 def setup_disk_paths():
-    print("--- data_source.py (Plugfield Mode) ---")
+    print("--- data_source.py (Modo PostgreSQL) ---")
     global DATA_DIR, STATUS_FILE, LOG_FILE, HISTORICO_FILE_CSV, DB_CONNECTION_STRING, LAST_UPDATE_FILE
-    if os.environ.get('RENDER'):
-        DATA_DIR = "/var/data"
-        DB_CONNECTION_STRING = f'sqlite:///{DATA_DIR}/temp_local_db.db'
-    else:
-        DATA_DIR = "."
+
+    # --- ALTERAÇÃO: Remove a lógica do RENDER e do DISCO ---
+    # O DB_CONNECTION_STRING virá 100% da variável de ambiente
+    # Os arquivos de log/status serão salvos localmente (e serão temporários no Render)
+    DATA_DIR = "."
+    # --- FIM DA ALTERAÇÃO ---
+
     STATUS_FILE = os.path.join(DATA_DIR, "status_atual.json")
     LOG_FILE = os.path.join(DATA_DIR, "eventos.log")
-    HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")
+    HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")  # Não mais usado
     LAST_UPDATE_FILE = os.path.join(DATA_DIR, "last_api_update.json")
-    print(f"Caminho do Disco de Dados: {DATA_DIR}")
+    print(f"Caminho do Disco de Dados (Temporário): {DATA_DIR}")
     print(f"Banco de Dados (Escrita): {DB_CONNECTION_STRING}")
 
 
 # ==========================================================
-# --- FUNÇÕES DE BANCO de DADOS (Mantidas) ---
+# --- FUNÇÕES DE BANCO de DADOS (ALTERADAS) ---
 # ==========================================================
 def get_engine():
+    # Esta função agora é a única fonte do engine.
+    # DB_CONNECTION_STRING é pego do os.getenv("DATABASE_URL") em config.py
     return create_engine(DB_CONNECTION_STRING)
 
 
-def save_to_sqlite(df_novos_dados):
+# --- NOVA FUNÇÃO: Gerencia a tabela de estado (app_state) ---
+def _init_state_table(engine):
+    """Garante que a tabela app_state exista e tenha valores padrão."""
+    DB_STATE_TABLE = "app_state"
+    try:
+        with engine.connect() as connection:
+            # Tenta criar a tabela
+            connection.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {DB_STATE_TABLE} (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+            """))
+            # Popula com valores padrão (apenas se não existirem)
+            for key, value in VALORES_PADRAO_ESTADO.items():
+                connection.execute(text(f"""
+                    INSERT INTO {DB_STATE_TABLE} (key, value)
+                    VALUES (:key, :value)
+                    ON CONFLICT(key) DO NOTHING;
+                """), {"key": key, "value": value})
+            connection.commit()
+        print(f"[DB] Tabela '{DB_STATE_TABLE}' inicializada.")
+    except Exception as e:
+        print(f"ERRO CRÍTICO ao inicializar a tabela de estado: {e}")
+
+
+# --- NOVAS FUNÇÕES: get/set para o estado (substitui calibracao_base.py) ---
+def get_app_state(key):
+    """Busca um valor da tabela de estado (ex: 'API_AUTO_ATIVADA')"""
+    DB_STATE_TABLE = "app_state"
+    engine = get_engine()
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = :key"), {"key": key})
+            value = result.scalar()  # Retorna o primeiro valor da primeira linha
+            if value is None:
+                # Se a chave não existe, retorna o padrão e tenta salvar
+                default_value = VALORES_PADRAO_ESTADO.get(key)
+                set_app_state(key, default_value)  # Tenta criar
+                return default_value
+            return value
+    except exc.OperationalError as e:
+        # Erro comum se o DB não existe (ex: teste local sem postgres)
+        print(f"AVISO: Não foi possível ler o estado do DB ({e}). Retornando padrão.")
+        return VALORES_PADRAO_ESTADO.get(key)
+    except Exception as e:
+        print(f"ERRO ao ler estado '{key}': {e}. Retornando padrão.")
+        return VALORES_PADRAO_ESTADO.get(key)
+
+
+def set_app_state(key, value):
+    """Salva um valor na tabela de estado (ex: 'API_AUTO_ATIVADA', 'True')"""
+    DB_STATE_TABLE = "app_state"
+    engine = get_engine()
+    try:
+        with engine.connect() as connection:
+            # ON CONFLICT(key) DO UPDATE é o "upsert" (cria se não existe, atualiza se existe)
+            connection.execute(text(f"""
+                INSERT INTO {DB_STATE_TABLE} (key, value)
+                VALUES (:key, :value)
+                ON CONFLICT(key) DO UPDATE SET value = :value;
+            """), {"key": key, "value": str(value)})
+            connection.commit()
+        return True
+    except Exception as e:
+        print(f"ERRO ao salvar estado '{key}': {e}")
+        return False
+
+
+# --- FIM DAS NOVAS FUNÇÕES DE ESTADO ---
+
+
+def save_to_db(df_novos_dados):
     if df_novos_dados.empty:
         return
     try:
         engine = get_engine()
         inspector = inspect(engine)
+
+        # --- ALTERAÇÃO: Inicializa a tabela de estado também ---
+        if not inspector.has_table("app_state"):
+            _init_state_table(engine)
+        # --- FIM DA ALTERAÇÃO ---
+
         if not inspector.has_table(DB_TABLE_NAME):
-            print(f"[SQLite] Tabela '{DB_TABLE_NAME}' não encontrada. Criando...")
+            print(f"[DB] Tabela '{DB_TABLE_NAME}' não encontrada. Criando...")
+            # (A definição da tabela de histórico permanece a mesma)
             colunas_db = {
                 'timestamp': 'TIMESTAMP', 'id_ponto': 'TEXT', 'chuva_mm': 'REAL',
                 'precipitacao_acumulada_mm': 'REAL', 'umidade_1m_perc': 'REAL',
@@ -227,69 +330,46 @@ def save_to_sqlite(df_novos_dados):
                 'base_1m': 'REAL', 'base_2m': 'REAL', 'base_3m': 'REAL',
                 'inclinometro_x': 'REAL', 'inclinometro_y': 'REAL'
             }
+            # Sintaxe do PostgreSQL é um pouco diferente para UNIQUE
             create_query = f"CREATE TABLE {DB_TABLE_NAME} (\n"
             create_query += ",\n".join([f'"{col}" {tipo}' for col, tipo in colunas_db.items()])
-            create_query += ",\nUNIQUE(id_ponto, \"timestamp\")\n);"
+            create_query += f",\nUNIQUE(id_ponto, \"timestamp\")\n);"
+
             with engine.connect() as connection:
                 connection.execute(text(create_query))
-            print(f"[SQLite] Tabela '{DB_TABLE_NAME}' criada com sucesso.")
+                connection.commit()
+            print(f"[DB] Tabela '{DB_TABLE_NAME}' criada com sucesso.")
+
         cols_tabela_db = [col['name'] for col in inspector.get_columns(DB_TABLE_NAME)]
         cols_para_salvar = [col for col in df_novos_dados.columns if col in cols_tabela_db]
         df_para_salvar = df_novos_dados[cols_para_salvar]
-        df_para_salvar.to_sql(DB_TABLE_NAME, engine, if_exists='append', index=False)
-        print(f"[SQLite] {len(df_para_salvar)} novos pontos salvos no DB.")
+
+        # Usar 'to_sql' com PostgreSQL pode ser lento.
+        # Uma inserção direta é mais robusta se 'to_sql' falhar.
+        df_para_salvar.to_sql(DB_TABLE_NAME, engine, if_exists='append', index=False, method=None)
+
+        print(f"[DB] {len(df_para_salvar)} novos pontos salvos no DB.")
+    except exc.IntegrityError:  # Erro de 'UNIQUE constraint failed'
+        print(f"[DB] Aviso: Dados duplicados para este timestamp. Ignorando.")
     except Exception as e:
-        if "UNIQUE constraint failed" in str(e):
-            print(f"[SQLite] Aviso: Dados duplicados para este timestamp. Ignorando.")
-        else:
-            adicionar_log("GERAL", f"ERRO CRÍTICO ao salvar no SQLite: {e}")
-            print(f"ERRO CRÍTICO ao salvar no SQLite: {e}")
+        adicionar_log("GERAL", f"ERRO CRÍTICO ao salvar no DB: {e}")
+        print(f"ERRO CRÍTICO ao salvar no DB: {e}")
+        traceback.print_exc()
 
 
-def migrate_csv_to_sqlite_initial():
-    # (Mantida)
-    engine = get_engine()
-    inspector = inspect(engine)
-    try:
-        if inspector.has_table(DB_TABLE_NAME):
-            with engine.connect() as connection:
-                query = text(f"SELECT COUNT(1) FROM {DB_TABLE_NAME}")
-                result = connection.execute(query)
-                count = result.scalar()
-                if count > 0:
-                    print(f"[MIGRAÇÃO] Tabela SQLite '{DB_TABLE_NAME}' já contém {count} linhas. Migração ignorada.")
-                    return True
-    except Exception as e:
-        print(f"[MIGRAÇÃO] Erro ao verificar tabela SQLite ({e}). Tentando migrar...")
-    df_csv = read_historico_from_csv()
-    if df_csv.empty:
-        print("[MIGRAÇÃO] CSV histórico vazio. Migração concluída (sem dados).")
-        return True
-    try:
-        colunas_para_migrar = [col for col in COLUNAS_HISTORICO if col in df_csv.columns]
-        df_csv_para_migrar = df_csv[colunas_para_migrar]
-        df_csv_para_migrar.to_sql(DB_TABLE_NAME, engine, if_exists='replace', index=False)
-        print(f"[MIGRAÇÃO] SUCESSO! {len(df_csv)} linhas transferidas do CSV para o SQLite.")
-        with engine.connect() as connection:
-            cols_tabela_db = [col['name'] for col in inspector.get_columns(DB_TABLE_NAME)]
-            for col_esperada in COLUNAS_HISTORICO:
-                if col_esperada not in cols_tabela_db:
-                    print(f"[MIGRAÇÃO] Adicionando coluna faltante '{col_esperada}' ao DB.")
-                    connection.execute(text(f'ALTER TABLE {DB_TABLE_NAME} ADD COLUMN "{col_esperada}" REAL'))
-        return True
-    except Exception as e:
-        adicionar_log("GERAL", f"ERRO CRÍTICO na migração CSV->SQLite: {e}")
-        print(f"ERRO CRÍTICO na migração CSV->SQLite: {e}")
-        return False
+# (Função migrar_csv_to_sqlite_initial removida)
 
-
-def read_data_from_sqlite(id_ponto, start_dt, end_dt):
-    print(f"[SQLite] Consultando dados para {id_ponto} de {start_dt} a {end_dt}")
+def read_data_from_db(id_ponto, start_dt, end_dt):
+    print(f"[DB] Consultando dados para {id_ponto} de {start_dt} a {end_dt}")
     engine = get_engine()
     inspector = inspect(engine)
     if not inspector.has_table(DB_TABLE_NAME):
-        print(f"[SQLite] Tabela '{DB_TABLE_NAME}' não existe. Retornando vazio.")
+        print(f"[DB] Tabela '{DB_TABLE_NAME}' não existe. Retornando vazio.")
+        # --- ALTERAÇÃO: Tenta criar as tabelas se não existirem ---
+        save_to_db(pd.DataFrame())  # Chama a função com DF vazio para forçar a criação da tabela
+        # --- FIM DA ALTERAÇÃO ---
         return pd.DataFrame(columns=COLUNAS_HISTORICO)
+
     start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
     query = f"""
@@ -307,7 +387,6 @@ def read_data_from_sqlite(id_ponto, start_dt, end_dt):
             parse_dates=["timestamp"]
         )
         if not df.empty and 'timestamp' in df.columns:
-            # Garante que o timestamp lido do SQLite seja 'aware' (UTC)
             if df['timestamp'].dt.tz is None:
                 df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         for col in COLUNAS_HISTORICO:
@@ -315,114 +394,41 @@ def read_data_from_sqlite(id_ponto, start_dt, end_dt):
                 df[col] = pd.NA
         return df[COLUNAS_HISTORICO]
     except Exception as e:
-        print(f"ERRO CRÍTICO ao ler do SQLite: {e}")
-        adicionar_log("GERAL", f"ERRO CRÍTICO ao ler do SQLite: {e}")
+        print(f"ERRO CRÍTICO ao ler do DB: {e}")
+        adicionar_log("GERAL", f"ERRO CRÍTICO ao ler do DB: {e}")
         return pd.DataFrame(columns=COLUNAS_HISTORICO)
 
 
-# ==========================================================
-# --- FUNÇÕES DE TEMPO DE SINCRONIA (NOVAS) ---
-# ==========================================================
-
-def save_last_api_update(timestamp_utc):
-    """ Salva o timestamp da última busca bem-sucedida no disco. """
-    try:
-        # A API Plugfield retorna dados em UTC, garantimos que seja salvo como ISO.
-        data = {"last_update_utc": timestamp_utc.isoformat()}
-        with open(LAST_UPDATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"ERRO ao salvar last_api_update: {e}")
-
-
-def get_last_api_update():
-    """ Lê o timestamp da última busca no disco. Retorna datetime (aware-UTC) ou None. """
-    try:
-        with open(LAST_UPDATE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if 'last_update_utc' in data:
-            # Garante que o timestamp retorne 'aware' (com fuso horário)
-            return datetime.datetime.fromisoformat(data['last_update_utc']).replace(tzinfo=datetime.timezone.utc)
-        return None
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    except Exception as e:
-        print(f"ERRO ao ler last_api_update: {e}")
-        return None
+# (Funções de CSV e Sincronia removidas ou não são mais necessárias)
 
 
 # ==========================================================
-# --- FUNÇÕES DE LEITURA E ESCRITA CSV (Mantidas) ---
-# ==========================================================
-def read_historico_from_csv():
-    try:
-        colunas_para_ler = []
-        if os.path.exists(HISTORICO_FILE_CSV):
-            colunas_validas_no_csv = pd.read_csv(HISTORICO_FILE_CSV, nrows=0).columns.tolist()
-            colunas_para_ler = [col for col in COLUNAS_HISTORICO if col in colunas_validas_no_csv]
-            if not colunas_para_ler:
-                colunas_para_ler = None
-        else:
-            raise FileNotFoundError
-        historico_df = pd.read_csv(HISTORICO_FILE_CSV, sep=',', usecols=colunas_para_ler)
-        if 'timestamp' in historico_df.columns:
-            historico_df['timestamp'] = pd.to_datetime(historico_df['timestamp'], utc=True)
-        for col in COLUNAS_HISTORICO:
-            if col not in historico_df.columns:
-                historico_df[col] = pd.NA
-        print(f"[CSV] Histórico lido: {len(historico_df)} entradas.")
-        return historico_df
-    except FileNotFoundError:
-        print(f"[CSV] Arquivo '{HISTORICO_FILE_CSV}' não encontrado. Criando novo.")
-        return pd.DataFrame(columns=COLUNAS_HISTORICO)
-    except Exception as e:
-        adicionar_log("CSV_READ", f"ERRO ao ler {HISTORICO_FILE_CSV}: {e}")
-        print(f"ERRO ao ler {HISTORICO_FILE_CSV}: {e}")
-        return pd.DataFrame(columns=COLUNAS_HISTORICO)
-
-
-def save_historico_to_csv(df):
-    try:
-        df_sem_duplicatas = df.sort_values(by='timestamp').drop_duplicates(
-            subset=['id_ponto', 'timestamp'], keep='last')
-        max_pontos = MAX_HISTORICO_PONTOS * len(PONTOS_DE_ANALISE)
-        df_truncado = df_sem_duplicatas.tail(max_pontos)
-        colunas_para_salvar = [col for col in COLUNAS_HISTORICO if col in df_truncado.columns]
-        df_truncado[colunas_para_salvar].to_csv(HISTORICO_FILE_CSV, index=False)
-        print(f"[CSV] Histórico salvo no arquivo (Mantidas {len(df_truncado)} entradas).")
-    except Exception as e:
-        adicionar_log("CSV_SAVE", f"ERRO ao salvar histórico: {e}")
-        print(f"ERRO ao salvar CSV: {e}")
-
-
-# ==========================================================
-# --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD (Mantida) ---
+# --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD (ALTERADA) ---
 # ==========================================================
 def get_all_data_from_disk(worker_mode=False):
     """
-    Dashboard (worker_mode=False) lê 14 dias do SQLITE.
-    Worker (worker_mode=True) lê 72h do CSV.
+    Lê os dados do banco de dados (PostgreSQL).
+    A lógica de CSV (worker_mode=True) foi removida.
     """
 
-    if worker_mode:
-        historico_df = read_historico_from_csv()
+    print("[Dashboard] Lendo dados para o dashboard A PARTIR DO DB (Últimos 14 dias)...")
+    agora_utc = datetime.datetime.now(datetime.timezone.utc)
+    end_dt = agora_utc
+    start_dt = agora_utc - datetime.timedelta(days=14)
+    lista_dfs = []
+    for id_ponto in PONTOS_DE_ANALISE.keys():
+        # A função read_data_from_db agora lê do Postgres
+        df_ponto = read_data_from_db(id_ponto, start_dt, end_dt)
+        if not df_ponto.empty:
+            lista_dfs.append(df_ponto)
+    if lista_dfs:
+        historico_df = pd.concat(lista_dfs, ignore_index=True)
+        print(f"[Dashboard] {len(historico_df)} registros lidos do DB para exibição.")
     else:
-        print("[Dashboard] Lendo dados para o dashboard A PARTIR DO SQLITE (Últimos 14 dias)...")
-        agora_utc = datetime.datetime.now(datetime.timezone.utc)
-        end_dt = agora_utc
-        start_dt = agora_utc - datetime.timedelta(days=14)
-        lista_dfs = []
-        for id_ponto in PONTOS_DE_ANALISE.keys():
-            df_ponto = read_data_from_sqlite(id_ponto, start_dt, end_dt)
-            if not df_ponto.empty:
-                lista_dfs.append(df_ponto)
-        if lista_dfs:
-            historico_df = pd.concat(lista_dfs, ignore_index=True)
-            print(f"[Dashboard] {len(historico_df)} registros lidos do SQLite para exibição.")
-        else:
-            print("[Dashboard] Nenhum dado encontrado no SQLite para o período.")
-            historico_df = pd.DataFrame(columns=COLUNAS_HISTORICO)
+        print("[Dashboard] Nenhum dado encontrado no DB para o período.")
+        historico_df = pd.DataFrame(columns=COLUNAS_HISTORICO)
 
+    # (A lógica de ler status.json e eventos.log permanece, são arquivos temporários)
     default_status = {
         "geral": "INDEFINIDO", "chuva": "INDEFINIDO", "umidade": "INDEFINIDO",
         "inclinometro_x": "INDEFINIDO", "inclinometro_y": "INDEFINIDO"
@@ -451,18 +457,19 @@ def get_all_data_from_disk(worker_mode=False):
 # ==========================================================
 # --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO (ALTERADA) ---
 # ==========================================================
-def executar_passo_api_e_salvar(historico_df_csv):
+def executar_passo_api_e_salvar(historico_df_existente):
+    """
+    historico_df_existente é lido do DB (não mais do CSV).
+    Salva os novos dados no DB (não mais no CSV).
+    """
     try:
-        # A função fetch_and_process_plugfield_data está definida acima
-        dados_api_df, logs_api = fetch_and_process_plugfield_data(historico_df_csv)
+        dados_api_df, logs_api = fetch_and_process_plugfield_data(historico_df_existente)
         status_novos = None
         for log in logs_api:
             mensagem_log_completa = f"| {log['id_ponto']} | {log['mensagem']}"
             print(mensagem_log_completa)
             adicionar_log(log['id_ponto'], log['mensagem'])
     except Exception as e:
-        # O erro 'NameError' de antes foi resolvido movendo fetch_and_process_plugfield_data
-        # para antes desta função.
         adicionar_log("GERAL", f"ERRO CRÍTICO (fetch_data): {e}")
         traceback.print_exc()
         return pd.DataFrame(), None
@@ -476,17 +483,16 @@ def executar_passo_api_e_salvar(historico_df_csv):
         for col in COLUNAS_HISTORICO:
             if col not in dados_api_df.columns:
                 dados_api_df[col] = pd.NA
-        save_to_sqlite(dados_api_df)
-        historico_atualizado_df_csv = pd.concat([historico_df_csv, dados_api_df], ignore_index=True)
-        save_historico_to_csv(historico_atualizado_df_csv)
 
-        # --- NOVO: Salva o timestamp da última atualização ---
-        if 'timestamp' in dados_api_df.columns:
-            # Pega o último timestamp do dado recebido da API
-            ultimo_timestamp_api = dados_api_df['timestamp'].max().to_pydatetime().replace(tzinfo=datetime.timezone.utc)
-            save_last_api_update(ultimo_timestamp_api)
-            print(f"[SQLite] Último timestamp da API salvo: {ultimo_timestamp_api}")
-        # --- FIM NOVO ---
+        # --- ALTERAÇÃO: Salva no DB (Postgres) ---
+        save_to_db(dados_api_df)
+
+        # --- REMOVIDO: Não salva mais no CSV ---
+        # historico_atualizado_df_csv = pd.concat([historico_df_csv, dados_api_df], ignore_index=True)
+        # save_historico_to_csv(historico_atualizado_df_csv)
+
+        # --- REMOVIDO: Não salva mais o last_api_update.json ---
+        # (A lógica agora é "buscar desde o último timestamp no DB")
 
         return dados_api_df, status_novos
     except Exception as e:

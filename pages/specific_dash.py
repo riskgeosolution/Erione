@@ -1,4 +1,4 @@
-# pages/specific_dash.py (CORREÇÃO FINAL E DEFINITIVA v6 - AGORA COM PDF ASSÍNCRONO)
+# pages/specific_dash.py (CORREÇÃO v8 - Removido 'status_json' da thread)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -31,6 +31,7 @@ import processamento
 import gerador_pdf
 import data_source
 
+# (O início do arquivo é idêntico)
 CORES_ALERTAS_CSS = {"verde": "green", "amarelo": "#FFD700", "laranja": "#fd7e14", "vermelho": "#dc3545",
                      "cinza": "grey"}
 CORES_UMIDADE = {'1m': CORES_ALERTAS_CSS["verde"], '2m': CORES_ALERTAS_CSS["amarelo"],
@@ -45,14 +46,10 @@ def get_layout():
     return dbc.Container([
         dcc.Store(id='store-id-ponto-ativo'),
         dcc.Store(id='store-logs-filtrados'),
-
-        # --- INÍCIO DA ALTERAÇÃO (Stores e Intervals para PDF e Excel) ---
         dcc.Store(id='excel-task-id-store'),
         dcc.Interval(id='excel-check-interval', interval=2 * 1000, n_intervals=0, disabled=True),
         dcc.Store(id='pdf-task-id-store'),
         dcc.Interval(id='pdf-check-interval', interval=2 * 1000, n_intervals=0, disabled=True),
-        # --- FIM DA ALTERAÇÃO ---
-
         html.Div(id='specific-dash-title', className="my-3 text-center"),
         dbc.Row(id='specific-dash-cards', children=[dbc.Spinner(size="lg")]),
         dbc.Row([
@@ -78,12 +75,8 @@ def get_layout():
                         dbc.Button("Gerar Excel", id='btn-excel-especifico', color="success", size="sm"),
                         dcc.Download(id='download-excel-especifico')
                     ], className="d-flex justify-content-center"),
-
-                    # --- INÍCIO DA ALTERAÇÃO (Indicador de status unificado) ---
                     html.Div(id='report-status-indicator', children=None,
                              className="text-center mt-3 small text-muted"),
-                    # --- FIM DA ALTERAÇÃO ---
-
                     dbc.Alert("Não há dados neste período para gerar o relatório.", id="alert-pdf-error",
                               color="danger", is_open=False, dismissable=True, className="mt-3"),
                     dbc.Alert("Erro desconhecido ao gerar relatório.", id="alert-pdf-generic-error", color="danger",
@@ -110,6 +103,7 @@ def get_layout():
     ], fluid=True)
 
 
+# (As funções 'update_specific_title' e 'update_specific_dashboard' são idênticas)
 @app.callback(Output('specific-dash-title', 'children'), Input('url-raiz', 'pathname'))
 def update_specific_title(pathname):
     if not pathname.startswith('/ponto/'): return dash.no_update
@@ -198,7 +192,6 @@ def update_specific_dashboard(pathname, dados_json, status_json, selected_hours)
         incli_x_str, incli_y_str = f"{ultimo_incli_x:.1f}°" if pd.notna(
             ultimo_incli_x) else "---", f"{ultimo_incli_y:.1f}°" if pd.notna(ultimo_incli_y) else "---"
 
-        # (Ajuste da fonte para fs-5, feito na mensagem anterior)
         layout_cards = [dbc.Col(dbc.Card(dbc.CardBody(
             [html.H5("Status Atual", style={'color': '#000000', 'font-weight': 'bold'}),
              html.P(status_geral_texto, className="fs-5", style={'color': '#000000', 'font-weight': 'bold'})]),
@@ -281,6 +274,7 @@ def update_specific_dashboard(pathname, dados_json, status_json, selected_hours)
     return layout_cards, layout_graficos, id_ponto
 
 
+# (As funções 'toggle_logs_modal' e 'load_logs_content' são idênticas)
 @app.callback(Output('modal-logs', 'is_open'),
               [Input('btn-ver-logs', 'n_clicks'), Input('btn-fechar-logs', 'n_clicks')],
               [State('modal-logs', 'is_open')], prevent_initial_call=True)
@@ -339,6 +333,7 @@ def load_logs_content(is_open, id_ponto, logs_json):
         return f"Erro ao formatar logs: {e}", []
 
 
+# (A função 'generate_logs_pdf' é idêntica)
 @app.callback(Output('download-pdf-logs', 'data'), Input('btn-pdf-logs', 'n_clicks'),
               [State('store-id-ponto-ativo', 'data'), State('store-logs-filtrados', 'data')], prevent_initial_call=True)
 def generate_logs_pdf(n_clicks, id_ponto, logs_filtrados):
@@ -356,7 +351,7 @@ def generate_logs_pdf(n_clicks, id_ponto, logs_filtrados):
         raise PreventUpdate
 
 
-# --- INÍCIO DA ALTERAÇÃO (Callback de Disparo do PDF) ---
+# --- INÍCIO DA CORREÇÃO (Callback de Disparo do PDF) ---
 @app.callback(
     [Output('pdf-task-id-store', 'data'),
      Output('pdf-check-interval', 'disabled'),
@@ -368,26 +363,24 @@ def generate_logs_pdf(n_clicks, id_ponto, logs_filtrados):
     Input('btn-pdf-especifico', 'n_clicks'),
     [State('pdf-date-picker', 'start_date'),
      State('pdf-date-picker', 'end_date'),
-     State('store-id-ponto-ativo', 'data'),
-     State('store-ultimo-status', 'data')],  # <-- Precisa do status_json
+     State('store-id-ponto-ativo', 'data')],
+    # Removido: State('store-ultimo-status', 'data')
     prevent_initial_call=True
 )
-def trigger_pdf_generation(n_clicks, start_date, end_date, id_ponto, status_json):
+def trigger_pdf_generation(n_clicks, start_date, end_date, id_ponto):
     if n_clicks is None or not id_ponto:
-        # Habilita os botões se o clique for inválido
         return dash.no_update, True, False, False, dash.no_update, False, False
 
     try:
         task_id = str(uuid.uuid4())
         print(f"[Trigger PDF] Iniciando tarefa: {task_id}")
 
-        # Inicia a thread (função 'thread_gerar_pdf' que criamos em gerador_pdf.py)
+        # A thread agora é chamada com 4 argumentos, como esperado
         thread = Thread(target=gerador_pdf.thread_gerar_pdf, args=(
-            task_id, start_date, end_date, id_ponto, status_json
+            task_id, start_date, end_date, id_ponto
         ))
         thread.start()
 
-        # Mostra o spinner e desabilita os botões
         status_indicator = html.Div(
             [html.Span(dbc.Spinner(size="sm"), className="me-2"), "Gerando PDF, por favor aguarde..."])
         return task_id, False, False, False, status_indicator, True, True
@@ -395,14 +388,14 @@ def trigger_pdf_generation(n_clicks, start_date, end_date, id_ponto, status_json
     except Exception as e:
         print(f"ERRO CRÍTICO ao INICIAR a thread de PDF: {e}")
         traceback.print_exc()
-        # Habilita os botões e mostra erro genérico
         return dash.no_update, True, False, True, "Erro ao iniciar a geração.", False, False
 
 
-# --- FIM DA ALTERAÇÃO ---
+# --- FIM DA CORREÇÃO ---
 
 
-# --- INÍCIO DA ALTERAÇÃO (Callback de Verificação do PDF) ---
+# (O restante do arquivo: check_pdf_status, trigger_excel_generation,
+#  check_excel_status, e update_dynamic_accumulated_text são idênticos)
 @app.callback(
     [Output('download-pdf-especifico', 'data'),
      Output('pdf-check-interval', 'disabled', allow_duplicate=True),
@@ -417,56 +410,36 @@ def trigger_pdf_generation(n_clicks, start_date, end_date, id_ponto, status_json
 )
 def check_pdf_status(n, task_id):
     if not task_id:
-        # Intervalo disparou por engano, desabilita a si mesmo
         return dash.no_update, True, False, False, dash.no_update, False, False
 
-    # Verifica o cache que criamos em gerador_pdf.py
     with gerador_pdf.PDF_CACHE_LOCK:
         task = gerador_pdf.PDF_CACHE.get(task_id)
 
     if task:
-        # A tarefa foi encontrada!
         try:
             if task["status"] == "concluido":
-                # SUCESSO!
                 with gerador_pdf.PDF_CACHE_LOCK:
-                    del gerador_pdf.PDF_CACHE[task_id]  # Limpa o cache
-
-                # Prepara os dados para download
+                    del gerador_pdf.PDF_CACHE[task_id]
                 pdf_buffer = task["data"]
                 content_base64 = base64.b64encode(pdf_buffer).decode('utf-8')
                 download_data = dict(content=content_base64, filename=task["filename"], base64=True,
                                      type="application/pdf")
-
-                # Retorna os dados, desliga o "checker" e reabilita os botões
                 return download_data, True, False, False, None, False, False
-
             elif task["status"] == "erro":
-                # ERRO!
                 with gerador_pdf.PDF_CACHE_LOCK:
-                    del gerador_pdf.PDF_CACHE[task_id]  # Limpa o cache
-
-                # Verifica se o erro foi "Sem dados"
+                    del gerador_pdf.PDF_CACHE[task_id]
                 if "Sem dados" in task["message"]:
                     return dash.no_update, True, True, False, None, False, False
                 else:
-                    # Outro erro
                     return dash.no_update, True, False, True, None, False, False
         except Exception as e:
-            # Erro inesperado ao ler o cache
             with gerador_pdf.PDF_CACHE_LOCK:
                 if task_id in gerador_pdf.PDF_CACHE: del gerador_pdf.PDF_CACHE[task_id]
             return dash.no_update, True, False, True, None, False, False
 
-    # Se 'task' is None, a tarefa ainda está rodando.
-    # Mantém o "checker" ligado (disabled=False) e os botões desabilitados (disabled=True)
     return dash.no_update, False, False, False, dash.no_update, True, True
 
 
-# --- FIM DA ALTERAÇÃO ---
-
-
-# (Callbacks do Excel mantidos como estão, usando threads)
 @app.callback([Output('excel-task-id-store', 'data'), Output('excel-check-interval', 'disabled'),
                Output('alert-pdf-error', 'is_open', allow_duplicate=True),
                Output('alert-pdf-generic-error', 'is_open', allow_duplicate=True),
