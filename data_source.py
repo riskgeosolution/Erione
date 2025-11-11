@@ -1,4 +1,4 @@
-# data_source.py (COMPLETO: v11 - Corrigida sintaxe SQL para PostgreSQL)
+# data_source.py (COMPLETO: v12 - Sintaxe SQL Final para SQLAlchemy + Postgres)
 
 import pandas as pd
 import json
@@ -226,10 +226,10 @@ def _init_state_table(engine):
                 );
             """))
             for key, value in VALORES_PADRAO_ESTADO.items():
-                # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v11) ---
+                # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v12) ---
                 connection.execute(text(f"""
                     INSERT INTO {DB_STATE_TABLE} (key, value)
-                    VALUES (%(key)s, %(value)s)
+                    VALUES (:key, :value)
                     ON CONFLICT(key) DO NOTHING;
                 """), {"key": key, "value": value})
             connection.commit()
@@ -245,8 +245,8 @@ def get_app_state(key):
     engine = get_engine()
     try:
         with engine.connect() as connection:
-            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v11) ---
-            query = text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = %(key)s")
+            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v12) ---
+            query = text(f"SELECT value FROM {DB_STATE_TABLE} WHERE key = :key")
             result = connection.execute(query, {"key": key})
             value = result.scalar()
             if value is None:
@@ -271,11 +271,11 @@ def set_app_state(key, value):
     engine = get_engine()
     try:
         with engine.connect() as connection:
-            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v11) ---
+            # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v12) ---
             query = text(f"""
                 INSERT INTO {DB_STATE_TABLE} (key, value)
-                VALUES (%(key)s, %(value)s)
-                ON CONFLICT(key) DO UPDATE SET value = %(value)s;
+                VALUES (:key, :value)
+                ON CONFLICT(key) DO UPDATE SET value = :value;
             """)
             connection.execute(query, {"key": key, "value": str(value)})
             connection.commit()
@@ -349,17 +349,19 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
     start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-    # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v11) ---
-    query = f"""
+    # --- CORREÇÃO DA SINTAXE DE PARÂMETRO (v12) ---
+    # Voltamos para :ponto, :start, :end
+    # E garantimos que a query seja passada como um objeto text()
+    query = text(f"""
         SELECT * FROM {DB_TABLE_NAME}
-        WHERE id_ponto = %(ponto)s
-        AND "timestamp" >= %(start)s
-        AND "timestamp" < %(end)s
+        WHERE id_ponto = :ponto
+        AND "timestamp" >= :start
+        AND "timestamp" < :end
         ORDER BY "timestamp" ASC
-    """
+    """)
     try:
         df = pd.read_sql_query(
-            text(query),  # <-- Envolve a query em text()
+            query,  # Passa o objeto text()
             engine,
             params={"ponto": id_ponto, "start": start_str, "end": end_str},
             parse_dates=["timestamp"]
