@@ -1,4 +1,4 @@
-# config.py (ATUALIZADO: Lendo bases dinâmicas)
+# config.py (ATUALIZADO: Duas fontes de dados)
 
 import os
 import datetime
@@ -19,25 +19,41 @@ except ImportError:
 
 load_dotenv()
 
-# --- API Plugfield (Mantido) ---
+# --- INÍCIO DA ALTERAÇÃO (Duas Estações Físicas) ---
 PLUGFIELD_CONFIG = {
-    "Ponto-1": {
+    # Estação 10435: Usada para Umidade e Inclinômetros
+    "Ponto-Sensores": {
         "STATION_ID": 10435,
+        "API_KEY": "FLU4rvAmXy9kAIib6fG0q2ZBpFvpHc8rWZH16wqj",
+        "USERNAME": "rafaela.skodowski@erione.com.br",
+        "PASSWORD": "Rafaela15.15"
+    },
+    # Estação 00880 (ID 3182): Usada APENAS para Chuva
+    "Ponto-Chuva": {
+        "STATION_ID": 3182,
         "API_KEY": "FLU4rvAmXy9kAIib6fG0q2ZBpFvpHc8rWZH16wqj",
         "USERNAME": "rafaela.skodowski@erione.com.br",
         "PASSWORD": "Rafaela15.15"
     }
 }
+
 PLUGFIELD_SENSOR_MAP = {
-    "Ponto-1": {
-        "chuva_mm": 35,
+    # Mapeamento da Estação 10435 (Sensores)
+    "Ponto-Sensores": {
+        # "chuva_mm": 35,  <-- REMOVIDO DESTA ESTAÇÃO
         "umidade_1m_perc": 30,
         "umidade_2m_perc": 85,
         "umidade_3m_perc": 87,
         "inclinometro_x": 41,
         "inclinometro_y": 42
+    },
+    # Mapeamento da Estação 3182 (Chuva)
+    "Ponto-Chuva": {
+        "chuva_mm": 35, # <-- ID 35 confirmado no seu log
     }
 }
+# --- FIM DA ALTERAÇÃO ---
+
 
 # --- Configurações de DB (Mantidas) ---
 DB_CONNECTION_STRING = os.getenv("DATABASE_URL", "sqlite:///temp_local_db.db")
@@ -46,7 +62,9 @@ FREQUENCIA_API_SEGUNDOS = 60 * 15
 MAX_HISTORICO_PONTOS = (72 * 60 * 60) // FREQUENCIA_API_SEGUNDOS
 
 # --- Configurações dos Pontos de Análise ---
-# Agora usa as constantes carregadas dinamicamente
+# !!! IMPORTANTE: Esta seção NÃO MUDA !!!
+# O resto do app (dashboards, worker) continua vendo apenas o "Ponto-1".
+# A "mágica" da união dos dados ocorre no data_source.py.
 PONTOS_DE_ANALISE = {
     "Ponto-1": {
         "nome": "Estação Principal",

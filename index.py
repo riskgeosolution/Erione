@@ -1,4 +1,4 @@
-# index.py (FINAL: Corrigido o NameError da thread)
+# index.py (FINAL: Corrigido o NameError da thread e com Rota de Alertas)
 
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -22,7 +22,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app import app, server
-from pages import login as login_page, main_app as main_app_page, map_view, general_dash, specific_dash
+
+# --- INÍCIO DA ALTERAÇÃO (Importa o novo dash de alertas) ---
+from pages import (
+    login as login_page, main_app as main_app_page, map_view,
+    general_dash, specific_dash, alerts_dash
+)
+# --- FIM DA ALTERAÇÃO ---
 
 SENHA_CLIENTE = '@Erione'
 SENHA_ADMIN = 'admin456'
@@ -197,7 +203,6 @@ app.layout = html.Div([
 ])
 
 
-# (O resto do arquivo 'index.py' é idêntico ao que você já tem, sem mais erros)
 @app.callback(Output('page-container-root', 'children'), Input('session-store', 'data'))
 def display_page_root(session_data):
     if session_data and session_data.get('logged_in', False):
@@ -209,7 +214,13 @@ def display_page_root(session_data):
 @app.callback(Output('page-content', 'children'), [Input('url-raiz', 'pathname'), Input('session-store', 'data')])
 def display_page_content(pathname, session_data):
     if not (session_data and session_data.get('logged_in', False)): return html.Div()
-    if pathname.startswith('/ponto/'):
+
+    # --- INÍCIO DA ALTERAÇÃO (Adiciona a nova rota) ---
+    if pathname == '/alertas':
+        return alerts_dash.get_layout()
+    # --- FIM DA ALTERAÇÃO ---
+
+    elif pathname.startswith('/ponto/'):
         return specific_dash.get_layout()
     elif pathname == '/dashboard-geral':
         return general_dash.get_layout()
