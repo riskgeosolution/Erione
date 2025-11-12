@@ -1,4 +1,5 @@
-# data_source.py (COMPLETO: v14 - Migração Automática de Schema no Render)
+# data_source.py (COMPLETO: CORRIGIDO PARA LER 'lastRainfall' da Estação 3182)
+# USA O ENDPOINT CORRETO DA DOCUMENTAÇÃO (GET /device/{id})
 
 import pandas as pd
 import json
@@ -14,15 +15,16 @@ from io import StringIO
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 from config import (
-    PONTOS_DE_ANALISE,  # <-- Agora só tem 'Ponto-1'
+    PONTOS_DE_ANALISE,
     FREQUENCIA_API_SEGUNDOS,
     MAX_HISTORICO_PONTOS,
-    PLUGFIELD_CONFIG,  # <-- Agora tem 'Ponto-Chuva' e 'Ponto-Sensores'
-    PLUGFIELD_SENSOR_MAP,  # <-- Agora mapeia as duas estações
+    PLUGFIELD_CONFIG,
+    PLUGFIELD_SENSOR_MAP,
     DB_CONNECTION_STRING,
     DB_TABLE_NAME
 )
 
+# --- Constantes do arquivo (sem alterações) ---
 DATA_DIR = "."
 HISTORICO_FILE_CSV = os.path.join(DATA_DIR, "historico_temp.csv")
 STATUS_FILE = os.path.join(DATA_DIR, "status_atual.json")
@@ -47,10 +49,10 @@ VALORES_PADRAO_ESTADO = {
     "INCLINOMETRO_BASE_Y": "8.3",
 }
 
-# --- INÍCIO DA ALTERAÇÃO (Lógica de Migração Automática) ---
 _MIGRATION_PERFORMED = False  # Flag global para rodar apenas uma vez por processo
 
 
+# --- Funções de Migração de DB (sem alterações) ---
 def _check_and_migrate_schema(engine):
     """
     Verifica se a tabela de histórico tem todas as colunas esperadas
@@ -96,10 +98,9 @@ def _check_and_migrate_schema(engine):
         traceback.print_exc()
         # Marca como 'concluído' mesmo em erro para não tentar de novo em loop
         _MIGRATION_PERFORMED = True
-    # --- FIM DA ALTERAÇÃO ---
 
 
-# (As funções _get_plugfield_token e _fetch_plugfield_sensor_data permanecem idênticas)
+# --- Funções de API (Login e Sensor) (sem alterações) ---
 def _get_plugfield_token(id_ponto_fisico):
     global PLUGFIELD_TOKEN_CACHE
     if id_ponto_fisico in PLUGFIELD_TOKEN_CACHE:
@@ -130,6 +131,7 @@ def _get_plugfield_token(id_ponto_fisico):
 
 
 def _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_ms, end_ms, sensor_name_log=""):
+    # Esta é a função que busca dados de UM sensor (GET /data/sensor)
     sensor_url = "https://prod-api.plugfield.com.br/data/sensor"
     headers = {'x-api-key': api_key, 'Authorization': token}
     params = {
@@ -156,6 +158,45 @@ def _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_ms
         return [], f"Erro de conexão ao buscar sensor {sensor_id}: {e}"
 
 
+# --- INÍCIO DA CORREÇÃO ---
+# 1. NOVA FUNÇÃO para buscar o JSON COMPLETO do Dashboard
+def _fetch_plugfield_dashboard_data(token, api_key, station_id):
+    """
+    Busca o JSON completo do dashboard da estação, que contém 'lastRainfall'.
+    Endpoint CONFIRMADO PELA DOCUMENTAÇÃO (GET /device/{id})
+    """
+
+    # --- ESTA É A URL CORRETA DA DOCUMENTAÇÃO (Página 14) ---
+    dashboard_url = f"https://prod-api.plugfield.com.br/device/{station_id}"
+    # ---------------------------------------------------------
+
+    headers = {'x-api-key': api_key, 'Authorization': token}
+
+    print(f"      - Buscando JSON completo do dashboard (para lastRainfall) em {dashboard_url}...")
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(dashboard_url, headers=headers)
+
+        if response.status_code == 200:
+            # Retorna o JSON inteiro
+            return response.json(), None
+        elif response.status_code == 401:
+            print(f"      - Token inválido (401) para dashboard {station_id}. Limpando cache.")
+            global PLUGFIELD_TOKEN_CACHE
+            for key, value in list(PLUGFIELD_TOKEN_CACHE.items()):
+                if value == token:
+                    del PLUGFIELD_TOKEN_CACHE[key]
+            return None, f"Token de acesso expirou (401)."
+        else:
+            return None, f"Erro ao buscar dashboard {station_id} ({response.status_code}): {response.text}"
+    except Exception as e:
+        return None, f"Erro de conexão ao buscar dashboard {station_id}: {e}"
+
+
+# --- FIM DA NOVA FUNÇÃO ---
+
+
 def fetch_and_process_plugfield_data(df_historico_existente):
     logs_api = []
     lista_dataframes_finais = []
@@ -173,6 +214,7 @@ def fetch_and_process_plugfield_data(df_historico_existente):
             start_dt_utc = DATA_INICIO_PADRAO
         print(f"[API Plugfield] Buscando dados desde {start_dt_utc.isoformat()}")
 
+    # Avança 1 segundo do último dado salvo para evitar duplicidade
     start_dt_utc += datetime.timedelta(seconds=1)
     end_time_ms = int(agora_utc.timestamp() * 1000)
     start_time_ms = int(start_dt_utc.timestamp() * 1000)
@@ -181,6 +223,7 @@ def fetch_and_process_plugfield_data(df_historico_existente):
         print(f"[API Plugfield] Ponto-1 já está atualizado. Nenhum dado novo para buscar.")
         return pd.DataFrame(), logs_api
 
+    # Itera sobre as estações físicas ("Ponto-Chuva", "Ponto-Sensores")
     for id_ponto_fisico, config in PLUGFIELD_CONFIG.items():
         print(f"[API Plugfield] Iniciando coleta para: {id_ponto_fisico}")
         try:
@@ -193,56 +236,155 @@ def fetch_and_process_plugfield_data(df_historico_existente):
                              "mensagem": f"ERRO: {id_ponto_fisico} não encontrado em PLUGFIELD_CONFIG."})
             continue
 
+        # Obtém o token de login
         token, erro_token = _get_plugfield_token(id_ponto_fisico)
         if erro_token:
             logs_api.append({"id_ponto": id_ponto_fisico, "mensagem": erro_token})
             if "403" in erro_token:
-                return pd.DataFrame(), logs_api
+                return pd.DataFrame(), logs_api  # Erro 403 (Proibido) é crítico, para a execução
             continue
 
-        dados_brutos_sensores = {}
-        for nome_app, sensor_id in sensor_map.items():
-            dados, erro = _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_time_ms,
-                                                       end_time_ms, sensor_name_log=nome_app)
-            if erro:
-                logs_api.append({"id_ponto": id_ponto_fisico, "mensagem": erro})
-            if dados:
-                dados_brutos_sensores[nome_app] = dados
+        # --- INÍCIO DA CORREÇÃO ---
+        # 2. LÓGICA MODIFICADA: Separa o Ponto-Chuva do Ponto-Sensores
 
-        if not dados_brutos_sensores:
-            print(f"[API Plugfield] Nenhum dado retornado pela API para {id_ponto_fisico} no período.")
-            continue
+        if id_ponto_fisico == "Ponto-Chuva":
+            # --- LÓGICA ESPECIAL PARA CHUVA (Estação 3182) ---
+            print(
+                f"[API Plugfield] {id_ponto_fisico}: [TENTATIVA 1] Usando método de dashboard (GET /device/id) para 'lastRainfall'.")
 
-        lista_dfs_processados = []
-        for nome_app, dados_brutos in dados_brutos_sensores.items():
-            df_sensor = pd.DataFrame(dados_brutos)
-            if df_sensor.empty:
+            dashboard_json, erro_dash = _fetch_plugfield_dashboard_data(token, api_key, station_id)
+
+            # --- INÍCIO DO FALLBACK (PLANO B) ---
+            if erro_dash:
+                logs_api.append({"id_ponto": id_ponto_fisico,
+                                 "mensagem": f"AVISO: Falha ao buscar dashboard ({erro_dash}). Tentando [FALLBACK] (método sensor-a-sensor)..."})
+                print(
+                    f"[API Plugfield] {id_ponto_fisico}: Falha no Dashboard. [FALLBACK] Usando método sensor-a-sensor.")
+
+                # REVERTE PARA A LÓGICA ANTIGA (que retorna 0, mas não quebra)
+                dados_brutos_sensores = {}
+                for nome_app, sensor_id in sensor_map.items():
+                    # Chama a função antiga _fetch_plugfield_sensor_data
+                    dados, erro_sensor = _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id,
+                                                                      start_time_ms,
+                                                                      end_time_ms, sensor_name_log=nome_app)
+                    if erro_sensor:
+                        logs_api.append({"id_ponto": id_ponto_fisico, "mensagem": erro_sensor})
+                    if dados:
+                        dados_brutos_sensores[nome_app] = dados
+
+                # Processa os dados do método antigo (do /data/sensor)
+                lista_dfs_processados = []
+                for nome_app, dados_brutos in dados_brutos_sensores.items():
+                    df_sensor = pd.DataFrame(dados_brutos)
+                    if df_sensor.empty: continue
+                    df_sensor = df_sensor[['time', 'valueFormatted']]
+                    df_sensor['timestamp'] = pd.to_datetime(df_sensor['time'], unit='ms', utc=True)
+                    df_sensor = df_sensor.set_index('timestamp')
+                    df_sensor = df_sensor.rename(columns={'valueFormatted': nome_app})
+                    df_sensor = df_sensor.drop(columns=['time'])
+                    df_sensor = df_sensor[~df_sensor.index.duplicated(keep='last')]
+                    lista_dfs_processados.append(df_sensor)
+
+                if not lista_dfs_processados:
+                    print(f"[API Plugfield] {id_ponto_fisico}: Nenhum dado retornado (método sensor-a-sensor).")
+                    continue
+
+                df_ponto_final = pd.concat(lista_dfs_processados, axis=1, join='outer')
+                df_ponto_final = df_ponto_final.interpolate(method='time', limit_area='inside', limit=4)
+                df_ponto_final = df_ponto_final.sort_index()
+
+            # --- FIM DO FALLBACK ---
+            else:
+                # [SUCESSO] (Lógica do lastRainfall)
+                # Navega no JSON para pegar os eventos de chuva
+                eventos_chuva = dashboard_json.get('dashboard', {}).get('lastRainfall', [])
+
+                if not eventos_chuva:
+                    print(
+                        f"[API Plugfield] {id_ponto_fisico}: 'lastRainfall' estava vazio ou não foi encontrado no JSON.")
+                    continue
+
+                # Constrói manualmente o DataFrame a partir dos eventos
+                dados_brutos = []
+                for evento in eventos_chuva:
+                    # Só nos importamos com eventos *novos* (posteriores ao start_time_ms)
+                    if evento['time'] >= start_time_ms:
+                        # 'valueFormatted' é o nome que a lógica de processamento espera
+                        dados_brutos.append({'time': evento['time'], 'valueFormatted': evento['dataValue']})
+
+                if not dados_brutos:
+                    print(f"[API Plugfield] {id_ponto_fisico}: Nenhum *novo* evento de chuva em 'lastRainfall'.")
+                    continue
+
+                # Cria o DataFrame no formato exato que a lógica de merge espera
+                df_sensor = pd.DataFrame(dados_brutos)
+                df_sensor['timestamp'] = pd.to_datetime(df_sensor['time'], unit='ms', utc=True)
+                df_sensor = df_sensor.set_index('timestamp')
+                # Renomeia a coluna de valor para 'chuva_mm' (que é o nome no sensor_map)
+                df_sensor = df_sensor.rename(columns={'valueFormatted': 'chuva_mm'})
+                df_sensor = df_sensor.drop(columns=['time'])
+                df_sensor = df_sensor[~df_sensor.index.duplicated(keep='last')]
+
+                df_ponto_final = df_sensor  # Este é o DataFrame final para este ponto
+
+                print(
+                    f"      - {id_ponto_fisico} (lastRainfall): {len(df_ponto_final)} novos eventos de chuva encontrados.")
+
+        else:
+            # --- LÓGICA ANTIGA (Para Ponto-Sensores, ID 10435) ---
+            print(f"[API Plugfield] {id_ponto_fisico}: Usando método de sensor-a-sensor.")
+            dados_brutos_sensores = {}
+            for nome_app, sensor_id in sensor_map.items():
+                # Esta é a lógica original que funciona para umidade e inclinômetro
+                dados, erro = _fetch_plugfield_sensor_data(token, api_key, station_id, sensor_id, start_time_ms,
+                                                           end_time_ms, sensor_name_log=nome_app)
+                if erro:
+                    logs_api.append({"id_ponto": id_ponto_fisico, "mensagem": erro})
+                if dados:
+                    dados_brutos_sensores[nome_app] = dados
+
+            if not dados_brutos_sensores:
+                print(f"[API Plugfield] Nenhum dado retornado pela API para {id_ponto_fisico} no período.")
                 continue
-            df_sensor = df_sensor[['time', 'valueFormatted']]
-            df_sensor['timestamp'] = pd.to_datetime(df_sensor['time'], unit='ms', utc=True)
-            df_sensor = df_sensor.set_index('timestamp')
-            df_sensor = df_sensor.rename(columns={'valueFormatted': nome_app})
-            df_sensor = df_sensor.drop(columns=['time'])
-            df_sensor = df_sensor[~df_sensor.index.duplicated(keep='last')]
-            lista_dfs_processados.append(df_sensor)
 
-        if not lista_dfs_processados:
-            print(f"[API Plugfield] Processamento não gerou DataFrames para {id_ponto_fisico}.")
+            lista_dfs_processados = []
+            for nome_app, dados_brutos in dados_brutos_sensores.items():
+                df_sensor = pd.DataFrame(dados_brutos)
+                if df_sensor.empty:
+                    continue
+                df_sensor = df_sensor[['time', 'valueFormatted']]
+                df_sensor['timestamp'] = pd.to_datetime(df_sensor['time'], unit='ms', utc=True)
+                df_sensor = df_sensor.set_index('timestamp')
+                df_sensor = df_sensor.rename(columns={'valueFormatted': nome_app})
+                df_sensor = df_sensor.drop(columns=['time'])
+                df_sensor = df_sensor[~df_sensor.index.duplicated(keep='last')]
+                lista_dfs_processados.append(df_sensor)
+
+            if not lista_dfs_processados:
+                print(f"[API Plugfield] Processamento não gerou DataFrames para {id_ponto_fisico}.")
+                continue
+
+            df_ponto_final = pd.concat(lista_dfs_processados, axis=1, join='outer')
+            df_ponto_final = df_ponto_final.interpolate(method='time', limit_area='inside', limit=4)
+            df_ponto_final = df_ponto_final.sort_index()
+        # --- FIM DA CORREÇÃO ---
+
+        # O código abaixo é comum a ambos os ramos (Chuva e Sensores)
+        if df_ponto_final.empty:
             continue
-
-        df_ponto_final = pd.concat(lista_dfs_processados, axis=1, join='outer')
-        df_ponto_final = df_ponto_final.interpolate(method='time', limit_area='inside', limit=4)
-        df_ponto_final = df_ponto_final.sort_index()
 
         df_ponto_final['id_ponto'] = id_ponto_fisico
         lista_dataframes_finais.append(df_ponto_final.reset_index())
 
+    # --- Lógica de Merge (sem alterações, mas agora recebe dados corretos) ---
     if not lista_dataframes_finais:
         return pd.DataFrame(), logs_api
 
     df_resultado_total = pd.concat(lista_dataframes_finais, ignore_index=True)
     df_resultado_total = df_resultado_total.rename(columns={'index': 'timestamp'})
 
+    # Esta lógica de separação e merge agora receberá os dados corretos de chuva
     df_chuva = df_resultado_total[df_resultado_total['id_ponto'] == 'Ponto-Chuva'].copy()
     df_sensores = df_resultado_total[df_resultado_total['id_ponto'] == 'Ponto-Sensores'].copy()
 
@@ -250,6 +392,9 @@ def fetch_and_process_plugfield_data(df_historico_existente):
         col_chuva_necessaria = ['timestamp', 'chuva_mm']
         if 'chuva_mm' not in df_chuva.columns: df_chuva['chuva_mm'] = pd.NA
         df_chuva = df_chuva[col_chuva_necessaria].set_index('timestamp')
+
+        # --- IMPORTANTE: Convertendo para numérico e tratando NaNs ---
+        df_chuva['chuva_mm'] = pd.to_numeric(df_chuva['chuva_mm'], errors='coerce').fillna(0.0)
 
     if not df_sensores.empty:
         col_sensores_necessarias = ['timestamp', 'umidade_1m_perc', 'umidade_2m_perc', 'umidade_3m_perc',
@@ -264,7 +409,7 @@ def fetch_and_process_plugfield_data(df_historico_existente):
     elif df_chuva.empty:
         print("[API Merge] Apenas dados de Sensores (10435) encontrados.")
         df_resultado_final = df_sensores.reset_index()
-        df_resultado_final['chuva_mm'] = pd.NA
+        df_resultado_final['chuva_mm'] = pd.NA  # Define como NA, será tratado como 0.0 depois
     elif df_sensores.empty:
         print("[API Merge] Apenas dados de Chuva (3182) encontrados.")
         df_resultado_final = df_chuva.reset_index()
@@ -272,17 +417,24 @@ def fetch_and_process_plugfield_data(df_historico_existente):
             df_resultado_final[col] = pd.NA
     else:
         print("[API Merge] Unindo dados de Chuva (3182) e Sensores (10435).")
+        # O 'outer' join é crucial
         df_merged = pd.concat([df_chuva, df_sensores], axis=1, join='outer')
+        # A interpolação preenche gaps de sensores, mas não deve afetar a chuva (que são eventos)
         df_merged = df_merged.interpolate(method='time', limit_area='inside', limit=4)
         df_resultado_final = df_merged.reset_index()
 
     df_resultado_final['id_ponto'] = 'Ponto-1'
+
+    # Substitui NaNs de chuva (criados pelo 'outer' join) por 0.0
+    # Isso é CRÍTICO para a soma de 72h funcionar
+    df_resultado_final['chuva_mm'] = df_resultado_final['chuva_mm'].fillna(0.0)
 
     logs_api.append({"id_ponto": "GERAL",
                      "mensagem": f"API: Sucesso. {len(df_resultado_final)} novos registros totais processados."})
     return df_resultado_final, logs_api
 
 
+# --- Funções de Log e Setup (sem alterações) ---
 def adicionar_log(id_ponto, mensagem):
     try:
         log_entry = f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} | {id_ponto} | {mensagem}\n"
@@ -413,10 +565,8 @@ def save_to_db(df_novos_dados):
     try:
         engine = get_engine()
 
-        # --- INÍCIO DA ALTERAÇÃO (Chamada de migração) ---
         # Garante que o schema (colunas) esteja atualizado ANTES de salvar
         _check_and_migrate_schema(engine)
-        # --- FIM DA ALTERAÇÃO ---
 
         inspector = inspect(engine)
         if not inspector.has_table("app_state"):
@@ -425,6 +575,10 @@ def save_to_db(df_novos_dados):
         cols_tabela_db = [col['name'] for col in inspector.get_columns(DB_TABLE_NAME)]
         cols_para_salvar = [col for col in df_novos_dados.columns if col in cols_tabela_db]
         df_para_salvar = df_novos_dados[cols_para_salvar]
+
+        # --- CORREÇÃO FINAL: Assegura que NaNs de chuva sejam 0.0 antes de salvar ---
+        if 'chuva_mm' in df_para_salvar.columns:
+            df_para_salvar['chuva_mm'] = pd.to_numeric(df_para_salvar['chuva_mm'], errors='coerce').fillna(0.0)
 
         df_para_salvar.to_sql(DB_TABLE_NAME, engine, if_exists='append', index=False, method=None)
 
@@ -452,10 +606,8 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
         ORDER BY "timestamp" ASC
     """)
     try:
-        # --- INÍCIO DA ALTERAÇÃO (Chamada de migração) ---
         # Garante que o schema (colunas) esteja atualizado ANTES de ler
         _check_and_migrate_schema(engine)
-        # --- FIM DA ALTERAÇÃO ---
 
         df = pd.read_sql_query(
             query,
@@ -469,6 +621,11 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
         for col in COLUNAS_HISTORICO:
             if col not in df.columns:
                 df[col] = pd.NA
+
+        # --- CORREÇÃO FINAL: Assegura que NaNs de chuva lidos sejam 0.0 ---
+        if 'chuva_mm' in df.columns:
+            df['chuva_mm'] = pd.to_numeric(df['chuva_mm'], errors='coerce').fillna(0.0)
+
         return df[COLUNAS_HISTORICO]
     except (exc.OperationalError, exc.ProgrammingError) as e:
         # O _check_and_migrate_schema já deve ter sido chamado,
@@ -489,18 +646,15 @@ def read_data_from_db(id_ponto, start_dt, end_dt):
 
 # ==========================================================
 # --- FUNÇÃO DE LEITURA PRINCIPAL PARA O DASHBOARD ---
-# =D========================================================
+# ==========================================================
 def get_all_data_from_disk(worker_mode=False):
     print("[Dashboard] Lendo dados para o dashboard A PARTIR DO DB (Últimos 14 dias)...")
 
-    # --- INÍCIO DA ALTERAÇÃO (Chamada de migração) ---
-    # Garante que o schema (colunas) esteja atualizado ANTES de ler
     try:
         engine = get_engine()
         _check_and_migrate_schema(engine)
     except Exception as e:
         print(f"ERRO ao tentar migrar schema no get_all_data: {e}")
-    # --- FIM DA ALTERAÇÃO ---
 
     agora_utc = datetime.datetime.now(datetime.timezone.utc)
     end_dt = agora_utc
@@ -518,6 +672,10 @@ def get_all_data_from_disk(worker_mode=False):
     else:
         print("[Dashboard] Nenhum dado encontrado no DB para o período.")
         historico_df = pd.DataFrame(columns=COLUNAS_HISTORICO)
+
+    # --- CORREÇÃO FINAL: Assegura que NaNs de chuva lidos sejam 0.0 ---
+    if 'chuva_mm' in historico_df.columns:
+        historico_df['chuva_mm'] = pd.to_numeric(historico_df['chuva_mm'], errors='coerce').fillna(0.0)
 
     default_status = {
         "geral": "INDEFINIDO", "chuva": "INDEFINIDO", "umidade": "INDEFINIDO",
@@ -545,7 +703,7 @@ def get_all_data_from_disk(worker_mode=False):
 
 
 # ==========================================================
-# --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO (Sem alterações) ---
+# --- FUNÇÃO PRINCIPAL DE REQUISIÇÃO E SALVAMENTO ---
 # ==========================================================
 def executar_passo_api_e_salvar(historico_df_existente):
     try:
@@ -565,7 +723,10 @@ def executar_passo_api_e_salvar(historico_df_existente):
     try:
         if 'timestamp' in dados_api_df.columns:
             dados_api_df['timestamp'] = pd.to_datetime(dados_api_df['timestamp'], utc=True)
+
+        # --- CORREÇÃO FINAL: Assegura que NaNs de chuva sejam 0.0 antes de salvar ---
         dados_api_df['chuva_mm'] = pd.to_numeric(dados_api_df['chuva_mm'], errors='coerce').fillna(0.0)
+
         for col in COLUNAS_HISTORICO:
             if col not in dados_api_df.columns:
                 dados_api_df[col] = pd.NA
