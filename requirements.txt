@@ -1,18 +1,8 @@
-dash
-dash-bootstrap-components
-dash-leaflet>=1.0.0
-plotly
-pandas
-numpy
-fpdf2
-gunicorn
-httpx
-requests
-# --- Novas Bibliotecas Necessárias para Persistência e Ambiente ---
-python-dotenv
-sqlalchemy
-psycopg2-binary
-openpyxl
-matplotlib
-xlsxwriter
-psycopg2-binary
+dash==2.17.1
+dash-bootstrap-components==1.6.0
+pandas==2.2.2
+httpx==0.27.0
+sqlalchemy==2.0.31
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+gunicorn==22.0.0

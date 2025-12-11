@@ -1,4 +1,4 @@
-# config.py (ATUALIZADO: Duas fontes de dados)
+# config.py (ATUALIZADO: Chuva movida para a estação 10435)
 
 import os
 import datetime
@@ -19,44 +19,34 @@ except ImportError:
 
 load_dotenv()
 
-# --- INÍCIO DA ALTERAÇÃO (Duas Estações Físicas) ---
+# --- INÍCIO DA ALTERAÇÃO (Unificação na Estação 10435) ---
 PLUGFIELD_CONFIG = {
-    # Estação 10435: Usada para Umidade e Inclinômetros
+    # Estação 10435: Agora contém TODOS os sensores (Umidade, Inclinômetro e Chuva)
     "Ponto-Sensores": {
         "STATION_ID": 10435,
         "API_KEY": "FLU4rvAmXy9kAIib6fG0q2ZBpFvpHc8rWZH16wqj",
         "USERNAME": "rafaela.skodowski@erione.com.br",
         "PASSWORD": "Rafaela15.15"
-    },
-    # Estação 00880 (ID 3182): Usada APENAS para Chuva
-    "Ponto-Chuva": {
-        "STATION_ID": 3182,
-        "API_KEY": "FLU4rvAmXy9kAIib6fG0q2ZBpFvpHc8rWZH16wqj",
-        "USERNAME": "rafaela.skodowski@erione.com.br",
-        "PASSWORD": "Rafaela15.15"
     }
+    # A entrada "Ponto-Chuva" (ID 3182) foi removida pois não é mais usada.
 }
 
 PLUGFIELD_SENSOR_MAP = {
-    # Mapeamento da Estação 10435 (Sensores)
+    # Mapeamento da Estação 10435 (Todos os sensores)
     "Ponto-Sensores": {
-        # "chuva_mm": 35,  <-- REMOVIDO DESTA ESTAÇÃO
+        "chuva_mm": 35,          # <-- Chuva movida para cá (ID 35)
         "umidade_1m_perc": 30,
         "umidade_2m_perc": 85,
         "umidade_3m_perc": 87,
         "inclinometro_x": 41,
         "inclinometro_y": 42
-    },
-    # Mapeamento da Estação 3182 (Chuva)
-    "Ponto-Chuva": {
-        "chuva_mm": 35, # <-- ID 35 confirmado no seu log
     }
 }
 # --- FIM DA ALTERAÇÃO ---
 
 
 # --- Configurações de DB (Mantidas) ---
-DB_CONNECTION_STRING = os.getenv("DATABASE_URL", "sqlite:///temp_local_db.db")
+DB_CONNECTION_STRING = os.getenv("DATABASE_URL", "postgresql://erione_db_obyo_user:Oy9NL1lpJJj99IcnCRrZhypyFMvuh9ef@dpg-d4gpk895pdvs738p0fa0-a.oregon-postgres.render.com/erione_db_obyo?sslmode=require")
 DB_TABLE_NAME = "historico_monitoramento"
 FREQUENCIA_API_SEGUNDOS = 60 * 15
 MAX_HISTORICO_PONTOS = (72 * 60 * 60) // FREQUENCIA_API_SEGUNDOS
